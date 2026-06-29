@@ -42,6 +42,7 @@ export const ctfCreateSchema = Joi.object({
   timerMinutes: Joi.number().integer().min(1).required(),
   image: Joi.string().allow('').optional(),
   attachments: Joi.array().items(Joi.string().allow('')).optional(),
+  hint: Joi.string().allow('').optional(),
   flags: Joi.array().items(Joi.string().required()).min(1).max(3).required(),
   questions: Joi.array().items(questionSchema).min(5).max(10).required()
 });

@@ -56,6 +56,10 @@ const ctfSchema = new mongoose.Schema({
   attachments: [{
     type: String
   }],
+  hint: {
+    type: String,
+    default: ''
+  },
   flags: {
     type: [String],
     required: true,

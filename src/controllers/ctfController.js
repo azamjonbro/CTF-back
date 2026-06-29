@@ -103,7 +103,8 @@ export const getChallengeDetails = async (req, res, next) => {
             image: challenge.image,
             attachments: challenge.attachments || [],
             questionsCount: challenge.questions.length,
-            flagsCount: challenge.flags.length
+            flagsCount: challenge.flags.length,
+            hasHint: !!challenge.hint
           }
         }
       });
@@ -145,6 +146,10 @@ export const getChallengeDetails = async (req, res, next) => {
         expiresAt: session.expiresAt,
         timeRemainingSeconds: Math.max(0, Math.floor((session.expiresAt.getTime() - Date.now()) / 1000)),
         status: session.status,
+        failedAttempts: session.failedAttempts || 0,
+        hasHint: !!challenge.hint,
+        hintUsed: session.hintUsed || false,
+        challengeHint: session.hintUsed ? challenge.hint : null,
         questions: questionsWithoutAnswers,
         solvedFlags: session.solvedFlags || [],
         flagsCount: challenge.flags.length
@@ -234,6 +239,10 @@ export const startChallengeSession = async (req, res, next) => {
         expiresAt: session.expiresAt,
         timeRemainingSeconds: Math.max(0, Math.floor((session.expiresAt.getTime() - Date.now()) / 1000)),
         status: session.status,
+        failedAttempts: session.failedAttempts || 0,
+        hasHint: !!challenge.hint,
+        hintUsed: session.hintUsed || false,
+        challengeHint: session.hintUsed ? challenge.hint : null,
         questions: questionsWithoutAnswers,
         solvedFlags: session.solvedFlags || [],
         flagsCount: challenge.flags.length
@@ -251,6 +260,101 @@ export const unlockHint = async (req, res, next) => {
     message: 'Hint already unlocked.',
     data: { text: '' }
   });
+};
+
+export const unlockChallengeHint = async (req, res, next) => {
+  try {
+    const { challengeId } = req.params;
+    const teamId = req.team._id;
+    const userId = req.user.userId;
+
+    const session = await ChallengeSession.findOne({ teamId, challengeId, status: 'active' });
+    if (!session) {
+      throw new AppError(ErrorCatalog.CTF_SESSION_NOT_FOUND);
+    }
+
+    if (new Date() > session.expiresAt) {
+      session.status = 'expired';
+      await session.save();
+      throw new AppError(ErrorCatalog.CTF_SESSION_EXPIRED);
+    }
+
+    const challenge = await CTF.findById(challengeId);
+    if (!challenge) {
+      throw new AppError(ErrorCatalog.CTF_NOT_FOUND);
+    }
+
+    if (session.hintUsed) {
+      return res.status(200).json({
+        success: true,
+        message: 'Hint already unlocked.',
+        data: { hint: challenge.hint }
+      });
+    }
+
+    session.hintUsed = true;
+
+    // Apply 20% penalty deduction on points earned so far in this session
+    const pointsEarned = session.solvedQuestions.reduce((sum, sq) => sum + (sq.pointsAwarded || 0), 0);
+    const penalty = Math.round(pointsEarned * 0.2);
+
+    if (penalty > 0) {
+      // Reduce the points awarded for previously solved questions in the session
+      session.solvedQuestions.forEach(sq => {
+        sq.pointsAwarded = Math.round(sq.pointsAwarded * 0.8);
+      });
+
+      // Deduct from Team
+      await Team.findByIdAndUpdate(teamId, {
+        $inc: { points: -penalty }
+      });
+
+      // Deduct from all team members
+      await User.updateMany(
+        { _id: { $in: req.team.members } },
+        { $inc: { points: -penalty } }
+      );
+
+      // Deduct from current user statistics
+      await User.findByIdAndUpdate(userId, {
+        $inc: { 'statistics.pointsEarned': -penalty }
+      });
+
+      await LeaderboardService.recalculateUserRankings();
+      await LeaderboardService.recalculateTeamRankings();
+
+      // Emit team score update
+      emitToTeam(teamId, 'team:score_update', { points: -penalty });
+    }
+
+    // Increment hints used statistic for current user
+    await User.findByIdAndUpdate(userId, {
+      $inc: { 'statistics.hintsUsed': 1 }
+    });
+
+    await session.save();
+
+    await AuditLog.create({
+      userId,
+      teamId,
+      action: 'UNLOCK_CHALLENGE_HINT',
+      status: 'success',
+      details: { challengeId, penaltyApplied: penalty },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent']
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Hint unlocked successfully. A 20% score reduction has been applied to this challenge.',
+      data: {
+        hint: challenge.hint,
+        penaltyApplied: penalty
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
 };
 
 export const submitQuestionAnswer = async (req, res, next) => {
@@ -305,7 +409,8 @@ export const submitQuestionAnswer = async (req, res, next) => {
       throw new AppError(ErrorCatalog.CTF_FLAG_INCORRECT, `Incorrect answer. Urinishlar: ${session.failedAttempts}/5`);
     }
 
-    const scoreAwarded = question.points || question.score || 100;
+    const originalScore = question.points || question.score || 100;
+    const scoreAwarded = session.hintUsed ? Math.round(originalScore * 0.8) : originalScore;
 
     session.solvedQuestions.push({
       questionId,

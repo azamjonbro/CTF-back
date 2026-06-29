@@ -73,8 +73,8 @@ export const getHackathonChallenges = async (req, res, next) => {
       throw new AppError(ErrorCatalog.HACKATHON_NOT_FOUND);
     }
 
-    if (hackathon.status !== 'running' && hackathon.status !== 'finished') {
-      throw new AppError(ErrorCatalog.HACKATHON_NOT_ACTIVE);
+    if (hackathon.status !== 'running') {
+      throw new AppError(ErrorCatalog.HACKATHON_NOT_ACTIVE, 'Xakaton topshiriqlari faqat musobaqa faol (running) bo\'lgan vaqtda ochiq bo\'ladi.');
     }
 
     // Verify user team is registered

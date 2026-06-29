@@ -32,7 +32,7 @@ const hashQuestions = async (questions) => {
 
 export const createChallenge = async (req, res, next) => {
   try {
-    const { title, shortDescription, longDescription, difficulty, stars, category, questions, timerMinutes, image, attachments, flags } = req.body;
+    const { title, shortDescription, longDescription, difficulty, stars, category, questions, timerMinutes, image, attachments, flags, hint } = req.body;
 
     const existing = await CTF.findOne({ title });
     if (existing) {
@@ -53,6 +53,7 @@ export const createChallenge = async (req, res, next) => {
       timerMinutes: timerMinutes || 60,
       image: image || '',
       attachments: attachments || [],
+      hint: hint || '',
       flags: securedFlags,
       questions: securedQuestions,
       author: req.user.userId,
@@ -87,7 +88,7 @@ export const createChallenge = async (req, res, next) => {
 export const editChallenge = async (req, res, next) => {
   try {
     const { challengeId } = req.params;
-    const { title, shortDescription, longDescription, difficulty, stars, category, questions, status, timerMinutes, image, attachments, flags } = req.body;
+    const { title, shortDescription, longDescription, difficulty, stars, category, questions, status, timerMinutes, image, attachments, flags, hint } = req.body;
 
     const challenge = await CTF.findById(challengeId);
     if (!challenge) {
@@ -111,6 +112,7 @@ export const editChallenge = async (req, res, next) => {
     if (timerMinutes !== undefined) challenge.timerMinutes = timerMinutes;
     if (image !== undefined) challenge.image = image;
     if (attachments !== undefined) challenge.attachments = attachments;
+    if (hint !== undefined) challenge.hint = hint;
 
     if (flags) {
       challenge.flags = await hashFlags(flags);

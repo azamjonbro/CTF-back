@@ -1,5 +1,5 @@
 import express from 'express';
-import { getChallenges, getChallengeDetails, startChallengeSession, submitQuestionAnswer, submitChallengeFlag, finishChallenge } from '../controllers/ctfController.js';
+import { getChallenges, getChallengeDetails, startChallengeSession, submitQuestionAnswer, submitChallengeFlag, finishChallenge, unlockChallengeHint } from '../controllers/ctfController.js';
 import { createChallenge, editChallenge, toggleChallengeStatus, deleteChallenge } from '../controllers/staffController.js';
 import { addQuestionToChallenge, uploadAttachment } from '../controllers/supportController.js';
 import { authenticate, requireRole, requireTeam } from '../middlewares/auth.js';
@@ -15,6 +15,7 @@ router.get('/:challengeId', authenticate, getChallengeDetails);
 router.post('/:challengeId/session', authenticate, requireTeam, startChallengeSession);
 router.post('/:challengeId/questions/:questionId/submit', authenticate, validateRequest(submitAnswerSchema), requireTeam, submitQuestionAnswer);
 router.post('/:challengeId/flags/:flagIndex/submit', authenticate, validateRequest(submitFlagSchema), requireTeam, submitChallengeFlag);
+router.post('/:challengeId/hint/unlock', authenticate, requireTeam, unlockChallengeHint);
 router.post('/:challengeId/finish', authenticate, requireTeam, finishChallenge);
 
 // STAFF ROUTES (Challenge Management)

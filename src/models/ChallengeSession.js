@@ -46,6 +46,10 @@ const challengeSessionSchema = new mongoose.Schema({
   failedAttempts: {
     type: Number,
     default: 0
+  },
+  hintUsed: {
+    type: Boolean,
+    default: false
   }
 }, {
   timestamps: true
