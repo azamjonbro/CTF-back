@@ -2,7 +2,7 @@ import express from 'express';
 import { getDashboardStats, createHackathon, manageRoles, getAuditLogs, getHackathonStats, editHackathon, deleteHackathon } from '../controllers/adminController.js';
 import { authenticate, requireRole } from '../middlewares/auth.js';
 import { validateRequest } from '../middlewares/validation.js';
-import { hackathonCreateSchema, hackathonUpdateSchema } from '../utils/validators.js';
+import { hackathonCreateSchema, hackathonUpdateSchema, manageRolesSchema } from '../utils/validators.js';
 
 const router = express.Router();
 
@@ -13,7 +13,7 @@ router.get('/stats', getDashboardStats);
 router.post('/hackathons', validateRequest(hackathonCreateSchema), createHackathon);
 router.put('/hackathons/:hackathonId', validateRequest(hackathonUpdateSchema), editHackathon);
 router.delete('/hackathons/:hackathonId', deleteHackathon);
-router.post('/roles', manageRoles);
+router.post('/roles', validateRequest(manageRolesSchema), manageRoles);
 router.get('/logs', getAuditLogs);
 router.get('/hackathons/:hackathonId/stats', getHackathonStats);
 

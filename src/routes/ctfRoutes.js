@@ -4,7 +4,7 @@ import { createChallenge, editChallenge, toggleChallengeStatus, deleteChallenge 
 import { addQuestionToChallenge, uploadAttachment } from '../controllers/supportController.js';
 import { authenticate, requireRole, requireTeam } from '../middlewares/auth.js';
 import { validateRequest } from '../middlewares/validation.js';
-import { ctfCreateSchema } from '../utils/validators.js';
+import { ctfCreateSchema, submitAnswerSchema, submitFlagSchema } from '../utils/validators.js';
 import { upload } from '../middlewares/upload.js';
 
 const router = express.Router();
@@ -13,8 +13,8 @@ const router = express.Router();
 router.get('/', authenticate, getChallenges);
 router.get('/:challengeId', authenticate, getChallengeDetails);
 router.post('/:challengeId/session', authenticate, requireTeam, startChallengeSession);
-router.post('/:challengeId/questions/:questionId/submit', authenticate, requireTeam, submitQuestionAnswer);
-router.post('/:challengeId/flags/:flagIndex/submit', authenticate, requireTeam, submitChallengeFlag);
+router.post('/:challengeId/questions/:questionId/submit', authenticate, validateRequest(submitAnswerSchema), requireTeam, submitQuestionAnswer);
+router.post('/:challengeId/flags/:flagIndex/submit', authenticate, validateRequest(submitFlagSchema), requireTeam, submitChallengeFlag);
 router.post('/:challengeId/finish', authenticate, requireTeam, finishChallenge);
 
 // STAFF ROUTES (Challenge Management)

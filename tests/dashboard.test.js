@@ -103,4 +103,31 @@ describe('Dashboard Statistics Integration Tests', () => {
       assert.strictEqual(res.body.success, false);
     });
   });
+
+  describe('Input Validation & Payload Security Tests', () => {
+    it('should reject answer submission with invalid payload structure (e.g. missing or overly long answer)', async () => {
+      const res = await request(server)
+        .post('/api/v1/ctfs/60f72365a12f34567890abcd/questions/60f72365a12f345678901234/submit')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({ wrongField: 'hello' }); // Missing answer field
+
+      assert.strictEqual(res.status, 400);
+      assert.strictEqual(res.body.success, false);
+      assert.ok(res.body.error.message.includes('validation'));
+    });
+
+    it('should reject admin roles update if body has invalid inputs or parameter injection attempt', async () => {
+      const res = await request(server)
+        .post('/api/v1/admin/roles')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({
+          targetUserId: '60f72365a12f34567890abcd',
+          action: 'inject', // Invalid action
+          role: 'hacker_role' // Invalid role
+        });
+
+      // Admin routes require admin role, but even if checked first or validation checks, it should either be blocked by authentication/authorization (401/403) or validation (400)
+      assert.ok([400, 401, 403].includes(res.status));
+    });
+  });
 });

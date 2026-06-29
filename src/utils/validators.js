@@ -74,3 +74,17 @@ export const hackathonUpdateSchema = Joi.object({
   status: Joi.string().valid('upcoming', 'active', 'completed').optional()
 });
 
+export const submitAnswerSchema = Joi.object({
+  answer: Joi.string().max(1000).required()
+});
+
+export const submitFlagSchema = Joi.object({
+  flag: Joi.string().max(1000).required()
+});
+
+export const manageRolesSchema = Joi.object({
+  targetUserId: Joi.string().hex().length(24).required(),
+  action: Joi.string().valid('add', 'remove').required(),
+  role: Joi.string().valid('admin', 'staff', 'support', 'team_leader', 'team_member').required()
+});
+
