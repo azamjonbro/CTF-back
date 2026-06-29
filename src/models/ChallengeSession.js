@@ -52,7 +52,6 @@ challengeSessionSchema.index({ teamId: 1, challengeId: 1 }, { unique: true });
 
 // TTL Index: This automatically sets status to expired or deletes old documents after a given period.
 // Note: We also run a BullMQ timer worker to update status and notify the user via websocket in real-time.
-challengeSessionSchema.index({ expiresAt: 1 });
 
 const ChallengeSession = mongoose.model('ChallengeSession', challengeSessionSchema);
 export default ChallengeSession;
