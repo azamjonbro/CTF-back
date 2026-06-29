@@ -131,11 +131,42 @@ export const getPublicProfile = async (req, res, next) => {
 
 export const updateProfile = async (req, res, next) => {
   try {
-    const { name, surname, age, country, description, information, profilePicture } = req.body;
+    const { name, surname, age, country, description, information, profilePicture, username, oldPassword, newPassword, confirmPassword } = req.body;
     
     const user = await User.findById(req.user.userId);
     if (!user) {
       throw new AppError(ErrorCatalog.USER_NOT_FOUND);
+    }
+
+    if (username !== undefined && username.trim() !== '') {
+      const normalizedUsername = username.trim().toLowerCase();
+      if (normalizedUsername !== user.username) {
+        if (!/^[a-zA-Z0-9]{3,30}$/.test(normalizedUsername)) {
+          throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'Username must be alphanumeric and between 3 and 30 characters.');
+        }
+        const existing = await User.findOne({ username: normalizedUsername });
+        if (existing) {
+          throw new AppError(ErrorCatalog.USER_ALREADY_EXISTS, 'Username is already taken.');
+        }
+        user.username = normalizedUsername;
+      }
+    }
+
+    if (newPassword !== undefined && newPassword !== '') {
+      if (!oldPassword) {
+        throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'Eski parolni kiritish majburiy.');
+      }
+      const isMatch = await user.comparePassword(oldPassword);
+      if (!isMatch) {
+        throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'Eski parol noto\'g\'ri kiritildi.');
+      }
+      if (newPassword !== confirmPassword) {
+        throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'Yangi parol va uni tasdiqlash mos kelmadi.');
+      }
+      if (newPassword.length < 8) {
+        throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'Yangi parol kamida 8 ta belgidan iborat bo\'lishi kerak.');
+      }
+      user.passwordHash = newPassword;
     }
 
     if (name !== undefined) user.name = name;
@@ -162,6 +193,7 @@ export const updateProfile = async (req, res, next) => {
       success: true,
       message: 'Profile updated successfully.',
       data: {
+        username: user.username,
         name: user.name,
         surname: user.surname,
         age: user.age,

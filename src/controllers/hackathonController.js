@@ -9,7 +9,7 @@ import { LeaderboardService } from '../services/leaderboardService.js';
 export const getHackathons = async (req, res, next) => {
   try {
     const hackathons = await Hackathon.find({})
-      .select('name description banner coverImage registrationStart registrationEnd hackathonStart hackathonEnd maxTeams status challenges')
+      .select('name description banner coverImage hackathonStart hackathonEnd maxTeams status challenges')
       .sort({ hackathonStart: 1 });
 
     const now = new Date();
@@ -19,20 +19,15 @@ export const getHackathons = async (req, res, next) => {
       let countdownSeconds = 0;
       let phase = 'unknown';
 
-      if (now < h.registrationStart) {
-        countdownSeconds = Math.max(0, Math.floor((h.registrationStart.getTime() - now.getTime()) / 1000));
-        phase = 'registration_starts';
-      } else if (now < h.registrationEnd) {
-        countdownSeconds = Math.max(0, Math.floor((h.registrationEnd.getTime() - now.getTime()) / 1000));
-        phase = 'registration_ends';
-      } else if (now < h.hackathonStart) {
+      if (h.status === 'open' || h.status === 'closed') {
         countdownSeconds = Math.max(0, Math.floor((h.hackathonStart.getTime() - now.getTime()) / 1000));
         phase = 'hackathon_starts';
-      } else if (now < h.hackathonEnd) {
+      } else if (h.status === 'running') {
         countdownSeconds = Math.max(0, Math.floor((h.hackathonEnd.getTime() - now.getTime()) / 1000));
         phase = 'hackathon_ends';
       } else {
         phase = 'completed';
+        countdownSeconds = 0;
       }
 
       return {
@@ -78,7 +73,7 @@ export const getHackathonChallenges = async (req, res, next) => {
       throw new AppError(ErrorCatalog.HACKATHON_NOT_FOUND);
     }
 
-    if (hackathon.status !== 'active') {
+    if (hackathon.status !== 'running' && hackathon.status !== 'finished') {
       throw new AppError(ErrorCatalog.HACKATHON_NOT_ACTIVE);
     }
 

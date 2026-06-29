@@ -20,14 +20,6 @@ const hackathonSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
-  registrationStart: {
-    type: Date,
-    required: true
-  },
-  registrationEnd: {
-    type: Date,
-    required: true
-  },
   hackathonStart: {
     type: Date,
     required: true
@@ -43,8 +35,8 @@ const hackathonSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['upcoming', 'active', 'completed'],
-    default: 'upcoming',
+    enum: ['open', 'closed', 'running', 'finished'],
+    default: 'open',
     index: true
   },
   challenges: [{

@@ -145,9 +145,8 @@ export const registerForHackathon = async (req, res, next) => {
       throw new AppError(ErrorCatalog.HACKATHON_NOT_FOUND);
     }
 
-    const now = new Date();
-    if (now > hackathon.registrationEnd) {
-      throw new AppError(ErrorCatalog.HACKATHON_REGISTRATION_CLOSED);
+    if (hackathon.status !== 'open') {
+      throw new AppError(ErrorCatalog.HACKATHON_REGISTRATION_CLOSED, 'Ro\'yxatdan o\'tish faqat xakaton ochiq (open) holatida bo\'lgandagina mumkin.');
     }
 
     // Check capacity limit

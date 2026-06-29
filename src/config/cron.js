@@ -25,22 +25,22 @@ export const initCronJobs = () => {
     try {
       const now = new Date();
       
-      // 1. Upcoming -> Active
+      // 1. open/closed -> running
       const startResult = await Hackathon.updateMany(
-        { status: 'upcoming', hackathonStart: { $lte: now } },
-        { $set: { status: 'active' } }
+        { status: { $in: ['open', 'closed'] }, hackathonStart: { $lte: now } },
+        { $set: { status: 'running' } }
       );
       if (startResult.modifiedCount > 0) {
-        logger.info(`Cron: Activated ${startResult.modifiedCount} hackathons.`);
+        logger.info(`Cron: Started ${startResult.modifiedCount} hackathons.`);
       }
 
-      // 2. Active -> Completed
+      // 2. running -> finished
       const endResult = await Hackathon.updateMany(
-        { status: 'active', hackathonEnd: { $lte: now } },
-        { $set: { status: 'completed' } }
+        { status: 'running', hackathonEnd: { $lte: now } },
+        { $set: { status: 'finished' } }
       );
       if (endResult.modifiedCount > 0) {
-        logger.info(`Cron: Completed ${endResult.modifiedCount} hackathons.`);
+        logger.info(`Cron: Finished ${endResult.modifiedCount} hackathons.`);
       }
     } catch (error) {
       logger.error(`Cron error during hackathon lifecycle updates: ${error.message}`);

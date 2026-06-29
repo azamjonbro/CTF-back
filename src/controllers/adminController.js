@@ -91,11 +91,18 @@ export const getDashboardStats = async (req, res, next) => {
 // Create a new Hackathon and auto-generate News item
 export const createHackathon = async (req, res, next) => {
   try {
-    const { name, description, banner, coverImage, registrationStart, registrationEnd, hackathonStart, hackathonEnd, maxTeams, challenges } = req.body;
+    const { name, description, banner, coverImage, hackathonStart, hackathonEnd, maxTeams, challenges } = req.body;
 
     const existing = await Hackathon.findOne({ name });
     if (existing) {
       throw new AppError(ErrorCatalog.HACKATHON_MAX_TEAMS_REACHED, 'Hackathon name already exists');
+    }
+
+    if (challenges && challenges.length > 0) {
+      const otherHackathons = await Hackathon.find({ challenges: { $in: challenges } });
+      if (otherHackathons.length > 0) {
+        throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'Bitta topshiriq faqat bitta xakatonga bog\'lanishi mumkin.');
+      }
     }
 
     const hackathon = new Hackathon({
@@ -103,13 +110,11 @@ export const createHackathon = async (req, res, next) => {
       description,
       banner,
       coverImage,
-      registrationStart,
-      registrationEnd,
       hackathonStart,
       hackathonEnd,
       maxTeams,
-      challenges,
-      status: 'upcoming'
+      challenges: challenges || [],
+      status: 'open'
     });
 
     await hackathon.save();
@@ -118,7 +123,7 @@ export const createHackathon = async (req, res, next) => {
     const news = new News({
       hackathonId: hackathon._id,
       title: `New Hackathon Announced: ${name}!`,
-      content: `Registration is open from ${new Date(registrationStart).toLocaleDateString()} to ${new Date(registrationEnd).toLocaleDateString()}. Register your team now!`,
+      content: `Registration is open for the upcoming hackathon! Run duration: ${new Date(hackathonStart).toLocaleDateString()} to ${new Date(hackathonEnd).toLocaleDateString()}. Register your team now!`,
       type: 'hackathon'
     });
     await news.save();
@@ -312,7 +317,7 @@ export const getHackathonStats = async (req, res, next) => {
 export const editHackathon = async (req, res, next) => {
   try {
     const { hackathonId } = req.params;
-    const { name, description, banner, coverImage, registrationStart, registrationEnd, hackathonStart, hackathonEnd, maxTeams, challenges, status } = req.body;
+    const { name, description, banner, coverImage, hackathonStart, hackathonEnd, maxTeams, challenges, status } = req.body;
 
     const hackathon = await Hackathon.findById(hackathonId);
     if (!hackathon) {
@@ -330,13 +335,21 @@ export const editHackathon = async (req, res, next) => {
     if (description !== undefined) hackathon.description = description;
     if (banner !== undefined) hackathon.banner = banner;
     if (coverImage !== undefined) hackathon.coverImage = coverImage;
-    if (registrationStart !== undefined) hackathon.registrationStart = registrationStart;
-    if (registrationEnd !== undefined) hackathon.registrationEnd = registrationEnd;
     if (hackathonStart !== undefined) hackathon.hackathonStart = hackathonStart;
     if (hackathonEnd !== undefined) hackathon.hackathonEnd = hackathonEnd;
     if (maxTeams !== undefined) hackathon.maxTeams = maxTeams;
-    if (challenges !== undefined) hackathon.challenges = challenges;
     if (status !== undefined) hackathon.status = status;
+
+    if (challenges !== undefined) {
+      const otherHackathons = await Hackathon.find({
+        _id: { $ne: hackathonId },
+        challenges: { $in: challenges }
+      });
+      if (otherHackathons.length > 0) {
+        throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'Bitta topshiriq faqat bitta xakatonga bog\'lanishi mumkin.');
+      }
+      hackathon.challenges = challenges;
+    }
 
     await hackathon.save();
 

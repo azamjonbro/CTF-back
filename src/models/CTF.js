@@ -5,13 +5,7 @@ const questionSchema = new mongoose.Schema({
   description: { type: String, required: true },
   answer: { type: String, required: true }, // bcrypt hashed
   points: { type: Number, required: true, min: 10 },
-  hint: { type: String, default: '' },
-  attachments: [{ type: String }],
-  type: {
-    type: String,
-    enum: ['text', 'url', 'image', 'video', 'audio', 'file'],
-    default: 'text'
-  }
+  hint: { type: String, default: '' }
 });
 
 const ctfSchema = new mongoose.Schema({
@@ -59,6 +53,9 @@ const ctfSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
+  attachments: [{
+    type: String
+  }],
   flags: {
     type: [String],
     required: true,

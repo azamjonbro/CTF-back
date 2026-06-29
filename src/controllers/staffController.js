@@ -24,9 +24,7 @@ const hashQuestions = async (questions) => {
       description: q.description,
       answer: hashedAnswer,
       points: q.points,
-      hint: q.hint || '',
-      attachments: q.attachments || [],
-      type: q.type || 'text'
+      hint: q.hint || ''
     });
   }
   return processed;
@@ -34,7 +32,7 @@ const hashQuestions = async (questions) => {
 
 export const createChallenge = async (req, res, next) => {
   try {
-    const { title, shortDescription, longDescription, difficulty, stars, category, questions, timerMinutes, image, flags } = req.body;
+    const { title, shortDescription, longDescription, difficulty, stars, category, questions, timerMinutes, image, attachments, flags } = req.body;
 
     const existing = await CTF.findOne({ title });
     if (existing) {
@@ -54,6 +52,7 @@ export const createChallenge = async (req, res, next) => {
       category,
       timerMinutes: timerMinutes || 60,
       image: image || '',
+      attachments: attachments || [],
       flags: securedFlags,
       questions: securedQuestions,
       author: req.user.userId,
@@ -88,7 +87,7 @@ export const createChallenge = async (req, res, next) => {
 export const editChallenge = async (req, res, next) => {
   try {
     const { challengeId } = req.params;
-    const { title, shortDescription, longDescription, difficulty, stars, category, questions, status, timerMinutes, image, flags } = req.body;
+    const { title, shortDescription, longDescription, difficulty, stars, category, questions, status, timerMinutes, image, attachments, flags } = req.body;
 
     const challenge = await CTF.findById(challengeId);
     if (!challenge) {
@@ -111,6 +110,7 @@ export const editChallenge = async (req, res, next) => {
     if (status) challenge.status = status;
     if (timerMinutes !== undefined) challenge.timerMinutes = timerMinutes;
     if (image !== undefined) challenge.image = image;
+    if (attachments !== undefined) challenge.attachments = attachments;
 
     if (flags) {
       challenge.flags = await hashFlags(flags);

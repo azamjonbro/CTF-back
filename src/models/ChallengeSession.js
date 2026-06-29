@@ -42,7 +42,11 @@ const challengeSessionSchema = new mongoose.Schema({
   solvedFlags: [{
     flagIndex: { type: Number, required: true },
     solvedAt: { type: Date, default: Date.now }
-  }]
+  }],
+  failedAttempts: {
+    type: Number,
+    default: 0
+  }
 }, {
   timestamps: true
 });
