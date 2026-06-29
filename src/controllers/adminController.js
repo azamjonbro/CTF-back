@@ -1,0 +1,403 @@
+import User from '../models/User.js';
+import Team from '../models/Team.js';
+import CTF from '../models/CTF.js';
+import Hackathon from '../models/Hackathon.js';
+import News from '../models/News.js';
+import AuditLog from '../models/AuditLog.js';
+import ChallengeSession from '../models/ChallengeSession.js';
+import { AppError, ErrorCatalog } from '../utils/errors.js';
+import bcrypt from 'bcryptjs';
+import { LeaderboardService } from '../services/leaderboardService.js';
+
+// Get Admin System Dashboard Statistics
+export const getDashboardStats = async (req, res, next) => {
+  try {
+    const totalUsers = await User.countDocuments({});
+    const totalTeams = await Team.countDocuments({});
+    const totalCTFs = await CTF.countDocuments({});
+    const totalHackathons = await Hackathon.countDocuments({});
+
+    // User registrations by day (velocity) - last 14 days
+    const registrationVelocity = await User.aggregate([
+      {
+        $match: {
+          createdAt: { $gte: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000) }
+        }
+      },
+      {
+        $group: {
+          _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
+          count: { $sum: 1 }
+        }
+      },
+      { $sort: { _id: 1 } }
+    ]);
+
+    // Challenge breakdown by category
+    const categoryStats = await CTF.aggregate([
+      {
+        $group: {
+          _id: '$category',
+          count: { $sum: 1 },
+          avgStars: { $avg: '$stars' }
+        }
+      }
+    ]);
+
+    // Staff creation performance (how many challenges each staff has authored)
+    const staffPerformance = await CTF.aggregate([
+      {
+        $group: {
+          _id: '$author',
+          challengesCreated: { $sum: 1 }
+        }
+      },
+      {
+        $lookup: {
+          from: 'users',
+          localField: '_id',
+          foreignField: '_id',
+          as: 'authorDetails'
+        }
+      },
+      { $unwind: '$authorDetails' },
+      {
+        $project: {
+          username: '$authorDetails.username',
+          challengesCreated: 1
+        }
+      }
+    ]);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        counts: {
+          users: totalUsers,
+          teams: totalTeams,
+          ctfs: totalCTFs,
+          hackathons: totalHackathons
+        },
+        registrationVelocity,
+        categoryStats,
+        staffPerformance
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Create a new Hackathon and auto-generate News item
+export const createHackathon = async (req, res, next) => {
+  try {
+    const { name, description, banner, coverImage, registrationStart, registrationEnd, hackathonStart, hackathonEnd, maxTeams, challenges } = req.body;
+
+    const existing = await Hackathon.findOne({ name });
+    if (existing) {
+      throw new AppError(ErrorCatalog.HACKATHON_MAX_TEAMS_REACHED, 'Hackathon name already exists');
+    }
+
+    const hackathon = new Hackathon({
+      name,
+      description,
+      banner,
+      coverImage,
+      registrationStart,
+      registrationEnd,
+      hackathonStart,
+      hackathonEnd,
+      maxTeams,
+      challenges,
+      status: 'upcoming'
+    });
+
+    await hackathon.save();
+
+    // Auto-create news announcement
+    const news = new News({
+      hackathonId: hackathon._id,
+      title: `New Hackathon Announced: ${name}!`,
+      content: `Registration is open from ${new Date(registrationStart).toLocaleDateString()} to ${new Date(registrationEnd).toLocaleDateString()}. Register your team now!`,
+      type: 'hackathon'
+    });
+    await news.save();
+
+    // Log action
+    await AuditLog.create({
+      userId: req.user.userId,
+      action: 'CREATE_HACKATHON',
+      status: 'success',
+      details: { hackathonName: name },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent']
+    });
+
+    res.status(201).json({
+      success: true,
+      message: 'Hackathon created and announcement news published successfully.',
+      data: hackathon
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Manage Staff and Support Permissions (Role assigner)
+export const manageRoles = async (req, res, next) => {
+  try {
+    const { targetUserId, action, role } = req.body; // action: 'add' | 'remove', role: 'admin' | 'staff' | 'support' | etc.
+
+    if (!['admin', 'staff', 'support', 'team_leader', 'team_member'].includes(role)) {
+      throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'Invalid role assignment');
+    }
+
+    const targetUser = await User.findById(targetUserId);
+    if (!targetUser) {
+      throw new AppError(ErrorCatalog.USER_NOT_FOUND);
+    }
+
+    if (action === 'add') {
+      targetUser.roles.push(role);
+      // Remove duplicate roles
+      targetUser.roles = [...new Set(targetUser.roles)];
+    } else if (action === 'remove') {
+      targetUser.roles = targetUser.roles.filter(r => r !== role);
+      // Ensure users always have at least 'team_member' role
+      if (targetUser.roles.length === 0) {
+        targetUser.roles.push('team_member');
+      }
+    }
+
+    await targetUser.save();
+
+    await AuditLog.create({
+      userId: req.user.userId,
+      action: 'ROLE_MANAGE',
+      status: 'success',
+      details: { targetUser: targetUser.username, action, role },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent']
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `Role ${role} successfully ${action}ed for user ${targetUser.username}.`,
+      data: {
+        userId: targetUser._id,
+        username: targetUser.username,
+        roles: targetUser.roles
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Get audit logs for logs viewer
+export const getAuditLogs = async (req, res, next) => {
+  try {
+    const limit = parseInt(req.query.limit) || 100;
+    const skip = parseInt(req.query.skip) || 0;
+
+    const logs = await AuditLog.find({})
+      .populate('userId', 'username email')
+      .populate('teamId', 'name')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit);
+
+    res.status(200).json({
+      success: true,
+      data: logs
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Get detailed stats of a specific hackathon for monitoring/analytics
+export const getHackathonStats = async (req, res, next) => {
+  try {
+    const { hackathonId } = req.params;
+
+    const hackathon = await Hackathon.findById(hackathonId);
+    if (!hackathon) {
+      throw new AppError(ErrorCatalog.HACKATHON_NOT_FOUND);
+    }
+
+    const challengeIds = hackathon.challenges;
+
+    // 1. Get Hackathon Leaderboard
+    const leaderboardData = await LeaderboardService.getHackathonLeaderboard(hackathonId);
+    const leaderboard = leaderboardData ? leaderboardData.leaderboard : [];
+
+    // 2. Get Active Sessions (what teams are working on right now)
+    const activeSessions = await ChallengeSession.find({
+      challengeId: { $in: challengeIds },
+      status: 'active'
+    })
+    .populate('teamId', 'name')
+    .populate('challengeId', 'title');
+
+    const formattedSessions = activeSessions.map(session => ({
+      teamName: session.teamId?.name || 'Unknown Team',
+      challengeTitle: session.challengeId?.title || 'Unknown Challenge',
+      openedAt: session.openedAt,
+      expiresAt: session.expiresAt,
+      timeRemainingSeconds: Math.max(0, Math.floor((session.expiresAt.getTime() - Date.now()) / 1000))
+    }));
+
+    // 3. Get User Solves (AuditLog for SUBMIT_FLAG_SUCCESS of these challenges)
+    const userSolves = await AuditLog.find({
+      action: 'SUBMIT_FLAG_SUCCESS',
+      'details.challengeId': { $in: challengeIds }
+    })
+    .populate('userId', 'username')
+    .populate('teamId', 'name')
+    .sort({ createdAt: -1 });
+
+    const challenges = await CTF.find({ _id: { $in: challengeIds } }).select('title questions');
+    const challengeMap = {};
+    for (const c of challenges) {
+      challengeMap[c._id.toString()] = {
+        title: c.title,
+        questions: c.questions.reduce((acc, q) => {
+          acc[q._id.toString()] = q.title;
+          return acc;
+        }, {})
+      };
+    }
+
+    const formattedSolves = userSolves.map(log => {
+      const cId = log.details?.challengeId?.toString();
+      const qId = log.details?.questionId?.toString();
+      const challengeInfo = challengeMap[cId] || { title: 'Unknown Challenge', questions: {} };
+      const challengeTitle = challengeInfo.title;
+      const questionTitle = challengeInfo.questions[qId] || 'Unknown Question';
+
+      return {
+        _id: log._id,
+        timestamp: log.createdAt,
+        username: log.userId?.username || 'Unknown Player',
+        teamName: log.teamId?.name || 'Unknown Team',
+        challengeTitle,
+        questionTitle,
+        points: log.details?.scoreAwarded || 0,
+        hintsUsed: log.details?.hintsUsed || 0
+      };
+    });
+
+    res.status(200).json({
+      success: true,
+      data: {
+        hackathon: {
+          id: hackathon._id,
+          name: hackathon.name,
+          status: hackathon.status,
+          hackathonStart: hackathon.hackathonStart,
+          hackathonEnd: hackathon.hackathonEnd
+        },
+        leaderboard,
+        activeSessions: formattedSessions,
+        userSolves: formattedSolves
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Edit/Update Hackathon and log action
+export const editHackathon = async (req, res, next) => {
+  try {
+    const { hackathonId } = req.params;
+    const { name, description, banner, coverImage, registrationStart, registrationEnd, hackathonStart, hackathonEnd, maxTeams, challenges, status } = req.body;
+
+    const hackathon = await Hackathon.findById(hackathonId);
+    if (!hackathon) {
+      throw new AppError(ErrorCatalog.HACKATHON_NOT_FOUND);
+    }
+
+    if (name && name !== hackathon.name) {
+      const existing = await Hackathon.findOne({ name });
+      if (existing) {
+        throw new AppError(ErrorCatalog.HACKATHON_MAX_TEAMS_REACHED, 'Hackathon name already exists');
+      }
+      hackathon.name = name;
+    }
+
+    if (description !== undefined) hackathon.description = description;
+    if (banner !== undefined) hackathon.banner = banner;
+    if (coverImage !== undefined) hackathon.coverImage = coverImage;
+    if (registrationStart !== undefined) hackathon.registrationStart = registrationStart;
+    if (registrationEnd !== undefined) hackathon.registrationEnd = registrationEnd;
+    if (hackathonStart !== undefined) hackathon.hackathonStart = hackathonStart;
+    if (hackathonEnd !== undefined) hackathon.hackathonEnd = hackathonEnd;
+    if (maxTeams !== undefined) hackathon.maxTeams = maxTeams;
+    if (challenges !== undefined) hackathon.challenges = challenges;
+    if (status !== undefined) hackathon.status = status;
+
+    await hackathon.save();
+
+    await AuditLog.create({
+      userId: req.user.userId,
+      action: 'EDIT_HACKATHON',
+      status: 'success',
+      details: { hackathonId, hackathonName: hackathon.name },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent']
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Hackathon updated successfully.',
+      data: hackathon
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Delete Hackathon, clear associated News and pull Team links
+export const deleteHackathon = async (req, res, next) => {
+  try {
+    const { hackathonId } = req.params;
+
+    const hackathon = await Hackathon.findById(hackathonId);
+    if (!hackathon) {
+      throw new AppError(ErrorCatalog.HACKATHON_NOT_FOUND);
+    }
+
+    const hackathonName = hackathon.name;
+
+    // Delete Hackathon document
+    await Hackathon.findByIdAndDelete(hackathonId);
+
+    // Delete associated News items
+    await News.deleteMany({ hackathonId });
+
+    // Pull from all registered teams
+    await Team.updateMany(
+      { hackathonsJoined: hackathonId },
+      { $pull: { hackathonsJoined: hackathonId } }
+    );
+
+    // Log action to AuditLog
+    await AuditLog.create({
+      userId: req.user.userId,
+      action: 'DELETE_HACKATHON',
+      status: 'success',
+      details: { hackathonId, hackathonName },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent']
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Hackathon and associated resources deleted successfully.'
+    });
+  } catch (error) {
+    next(error);
+  }
+};
