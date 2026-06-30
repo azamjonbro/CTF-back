@@ -7,13 +7,17 @@ export const registerSchema = Joi.object({
   name: Joi.string().max(50).allow(''),
   surname: Joi.string().max(50).allow(''),
   age: Joi.number().integer().min(10).max(120).allow(null),
-  country: Joi.string().max(100).allow('')
+  country: Joi.string().max(100).allow(''),
+  captchaId: Joi.string().hex().length(24).optional(),
+  captchaAnswer: Joi.any().optional()
 });
 
 export const loginSchema = Joi.object({
   usernameOrEmail: Joi.string().required(),
   password: Joi.string().required(),
-  deviceName: Joi.string().max(500).default('Generic Web Browser')
+  deviceName: Joi.string().max(500).default('Generic Web Browser'),
+  captchaId: Joi.string().hex().length(24).optional(),
+  captchaAnswer: Joi.any().optional()
 });
 
 export const teamCreateSchema = Joi.object({

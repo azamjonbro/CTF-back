@@ -6,6 +6,7 @@ import BlacklistedToken from '../models/BlacklistedToken.js';
 import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import { LeaderboardService } from '../services/leaderboardService.js';
+import Captcha from '../models/Captcha.js';
 
 // Parse UserAgent into readable Device/OS/Browser info
 const getDeviceInfo = (userAgentHeader, ip) => {
@@ -31,9 +32,51 @@ const getDeviceInfo = (userAgentHeader, ip) => {
   };
 };
 
+export const getCaptcha = async (req, res, next) => {
+  try {
+    const num1 = Math.floor(Math.random() * 10) + 1;
+    const num2 = Math.floor(Math.random() * 10) + 1;
+    const operators = ['+', '-', '*'];
+    const operator = operators[Math.floor(Math.random() * operators.length)];
+
+    let answer;
+    if (operator === '+') answer = num1 + num2;
+    else if (operator === '-') answer = num1 - num2;
+    else if (operator === '*') answer = num1 * num2;
+
+    const captcha = new Captcha({ answer });
+    await captcha.save();
+
+    res.status(200).json({
+      success: true,
+      data: {
+        captchaId: captcha._id,
+        question: `${num1} ${operator} ${num2} = ?`
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 export const register = async (req, res, next) => {
   try {
-    const { username, email, password, name, surname, age, country } = req.body;
+    const { username, email, password, name, surname, age, country, captchaId, captchaAnswer } = req.body;
+
+    if (process.env.NODE_ENV !== 'test') {
+      if (!captchaId || captchaAnswer === undefined || captchaAnswer === '') {
+        throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'Matematik captcha to\'ldirilishi shart.');
+      }
+      const captcha = await Captcha.findById(captchaId);
+      if (!captcha) {
+        throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'Captcha muddati tugagan yoki noto\'g\'ri.');
+      }
+      if (parseInt(captchaAnswer, 10) !== captcha.answer) {
+        await Captcha.findByIdAndDelete(captchaId);
+        throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'Captcha javobi noto\'g\'ri.');
+      }
+      await Captcha.findByIdAndDelete(captchaId);
+    }
 
     const existingUser = await User.findOne({ $or: [{ username }, { email }] });
     if (existingUser) {
@@ -77,7 +120,22 @@ export const register = async (req, res, next) => {
 
 export const login = async (req, res, next) => {
   try {
-    const { usernameOrEmail, password, deviceName } = req.body;
+    const { usernameOrEmail, password, deviceName, captchaId, captchaAnswer } = req.body;
+
+    if (process.env.NODE_ENV !== 'test') {
+      if (!captchaId || captchaAnswer === undefined || captchaAnswer === '') {
+        throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'Matematik captcha to\'ldirilishi shart.');
+      }
+      const captcha = await Captcha.findById(captchaId);
+      if (!captcha) {
+        throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'Captcha muddati tugagan yoki noto\'g\'ri.');
+      }
+      if (parseInt(captchaAnswer, 10) !== captcha.answer) {
+        await Captcha.findByIdAndDelete(captchaId);
+        throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'Captcha javobi noto\'g\'ri.');
+      }
+      await Captcha.findByIdAndDelete(captchaId);
+    }
 
     const user = await User.findOne({
       $or: [{ username: usernameOrEmail.toLowerCase() }, { email: usernameOrEmail.toLowerCase() }]
