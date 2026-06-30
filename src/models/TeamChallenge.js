@@ -21,10 +21,10 @@ const flagAttemptSchema = new mongoose.Schema({
   failedAttempts: { type: Number, default: 0 }
 }, { _id: false });
 
-const challengeSessionSchema = new mongoose.Schema({
-  userId: {
+const teamChallengeSchema = new mongoose.Schema({
+  teamId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
+    ref: 'Team',
     required: true
   },
   challengeId: {
@@ -67,11 +67,8 @@ const challengeSessionSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Ensure a user can only have one session per challenge active at a time
-challengeSessionSchema.index({ userId: 1, challengeId: 1 }, { unique: true });
+// Ensure a team can only have one session per challenge active at a time
+teamChallengeSchema.index({ teamId: 1, challengeId: 1 }, { unique: true });
 
-// TTL Index: This automatically sets status to expired or deletes old documents after a given period.
-// Note: We also run a BullMQ timer worker to update status and notify the user via websocket in real-time.
-
-const ChallengeSession = mongoose.model('ChallengeSession', challengeSessionSchema);
-export default ChallengeSession;
+const TeamChallenge = mongoose.model('TeamChallenge', teamChallengeSchema);
+export default TeamChallenge;

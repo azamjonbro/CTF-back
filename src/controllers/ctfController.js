@@ -3,12 +3,21 @@ import Team from '../models/Team.js';
 import User from '../models/User.js';
 import Hackathon from '../models/Hackathon.js';
 import ChallengeSession from '../models/ChallengeSession.js';
+import TeamChallenge from '../models/TeamChallenge.js';
 import AuditLog from '../models/AuditLog.js';
 import { AppError, ErrorCatalog } from '../utils/errors.js';
 
 import { LeaderboardService } from '../services/leaderboardService.js';
 import { emitToGlobal, emitToTeam, emitToHackathon } from '../config/socket.js';
 import bcrypt from 'bcryptjs';
+
+const getChallengeMode = async (challengeId) => {
+  const hackathon = await Hackathon.findOne({
+    challenges: challengeId,
+    status: { $in: ['open', 'closed', 'running'] }
+  });
+  return hackathon ? 'hackathon' : 'practice';
+};
 
 // Get active challenges, filtering out drafts unless admin/staff
 export const getChallenges = async (req, res, next) => {
@@ -77,13 +86,17 @@ export const getChallengeDetails = async (req, res, next) => {
       throw new AppError(ErrorCatalog.CTF_NOT_FOUND);
     }
 
-    // Find user's team
-    const team = await Team.findOne({ members: userId });
-    const teamId = team ? team._id : null;
-
+    const mode = await getChallengeMode(challengeId);
     let session = null;
-    if (teamId) {
-      session = await ChallengeSession.findOne({ teamId, challengeId });
+
+    if (mode === 'hackathon') {
+      const team = await Team.findOne({ members: userId });
+      const teamId = team ? team._id : null;
+      if (teamId) {
+        session = await TeamChallenge.findOne({ teamId, challengeId });
+      }
+    } else {
+      session = await ChallengeSession.findOne({ userId, challengeId });
     }
 
     if (!session) {
@@ -147,6 +160,8 @@ export const getChallengeDetails = async (req, res, next) => {
         timeRemainingSeconds: Math.max(0, Math.floor((session.expiresAt.getTime() - Date.now()) / 1000)),
         status: session.status,
         failedAttempts: session.failedAttempts || 0,
+        questionAttempts: session.questionAttempts || [],
+        flagAttempts: session.flagAttempts || [],
         hasHint: !!challenge.hint,
         hintUsed: session.hintUsed || false,
         challengeHint: session.hintUsed ? challenge.hint : null,
@@ -163,50 +178,78 @@ export const getChallengeDetails = async (req, res, next) => {
 export const startChallengeSession = async (req, res, next) => {
   try {
     const { challengeId } = req.params;
-    const teamId = req.team._id;
+    const userId = req.user.userId;
 
     const challenge = await CTF.findOne({ _id: challengeId, status: 'active' });
     if (!challenge) {
       throw new AppError(ErrorCatalog.CTF_NOT_FOUND);
     }
 
-    // Check if challenge is part of an active/upcoming hackathon
-    const hackathon = await Hackathon.findOne({ 
-      challenges: challengeId,
-      status: { $in: ['open', 'closed', 'running'] }
-    });
-    if (hackathon) {
-      if (!req.team.hackathonsJoined.includes(hackathon._id)) {
-        throw new AppError(ErrorCatalog.HACKATHON_TEAM_NOT_REGISTERED);
+    const mode = await getChallengeMode(challengeId);
+    let session = null;
+
+    if (mode === 'hackathon') {
+      const team = await Team.findOne({ members: userId });
+      if (!team) {
+        throw new AppError(ErrorCatalog.HACKATHON_TEAM_NOT_REGISTERED, 'Xakaton topshiriqlarini bajarish uchun jamoada bo\'lishingiz shart.');
       }
-      if (hackathon.status !== 'running') {
-        throw new AppError(ErrorCatalog.HACKATHON_NOT_ACTIVE);
+      const hackathon = await Hackathon.findOne({
+        challenges: challengeId,
+        status: { $in: ['open', 'closed', 'running'] }
+      });
+      if (hackathon) {
+        if (!team.hackathonsJoined.includes(hackathon._id)) {
+          throw new AppError(ErrorCatalog.HACKATHON_TEAM_NOT_REGISTERED);
+        }
+        if (hackathon.status !== 'running') {
+          throw new AppError(ErrorCatalog.HACKATHON_NOT_ACTIVE);
+        }
       }
-    }
 
-    // Check if team already has a session
-    let session = await ChallengeSession.findOne({ teamId, challengeId });
-    
-    if (!session) {
-      const durationMs = (challenge.timerMinutes || 60) * 60 * 1000;
-      const expiresAt = new Date(Date.now() + durationMs);
+      session = await TeamChallenge.findOne({ teamId: team._id, challengeId });
+      if (!session) {
+        const durationMs = (challenge.timerMinutes || 60) * 60 * 1000;
+        const expiresAt = new Date(Date.now() + durationMs);
 
-      session = new ChallengeSession({
-        teamId,
-        challengeId,
-        expiresAt
-      });
-      await session.save();
+        session = new TeamChallenge({
+          teamId: team._id,
+          challengeId,
+          expiresAt
+        });
+        await session.save();
 
-      await AuditLog.create({
-        userId: req.user.userId,
-        teamId,
-        action: 'CHALLENGE_SESSION_START',
-        status: 'success',
-        details: { challengeId, challengeTitle: challenge.title },
-        ipAddress: req.ip,
-        userAgent: req.headers['user-agent']
-      });
+        await AuditLog.create({
+          userId,
+          teamId: team._id,
+          action: 'CHALLENGE_SESSION_START',
+          status: 'success',
+          details: { challengeId, challengeTitle: challenge.title, mode: 'hackathon' },
+          ipAddress: req.ip,
+          userAgent: req.headers['user-agent']
+        });
+      }
+    } else {
+      session = await ChallengeSession.findOne({ userId, challengeId });
+      if (!session) {
+        const durationMs = (challenge.timerMinutes || 60) * 60 * 1000;
+        const expiresAt = new Date(Date.now() + durationMs);
+
+        session = new ChallengeSession({
+          userId,
+          challengeId,
+          expiresAt
+        });
+        await session.save();
+
+        await AuditLog.create({
+          userId,
+          action: 'CHALLENGE_SESSION_START',
+          status: 'success',
+          details: { challengeId, challengeTitle: challenge.title, mode: 'practice' },
+          ipAddress: req.ip,
+          userAgent: req.headers['user-agent']
+        });
+      }
     }
 
     // Prepare questions projection
@@ -240,6 +283,8 @@ export const startChallengeSession = async (req, res, next) => {
         timeRemainingSeconds: Math.max(0, Math.floor((session.expiresAt.getTime() - Date.now()) / 1000)),
         status: session.status,
         failedAttempts: session.failedAttempts || 0,
+        questionAttempts: session.questionAttempts || [],
+        flagAttempts: session.flagAttempts || [],
         hasHint: !!challenge.hint,
         hintUsed: session.hintUsed || false,
         challengeHint: session.hintUsed ? challenge.hint : null,
@@ -265,10 +310,22 @@ export const unlockHint = async (req, res, next) => {
 export const unlockChallengeHint = async (req, res, next) => {
   try {
     const { challengeId } = req.params;
-    const teamId = req.team._id;
     const userId = req.user.userId;
 
-    const session = await ChallengeSession.findOne({ teamId, challengeId, status: 'active' });
+    const mode = await getChallengeMode(challengeId);
+    let session = null;
+    let team = null;
+
+    if (mode === 'hackathon') {
+      team = await Team.findOne({ members: userId });
+      if (!team) {
+        throw new AppError(ErrorCatalog.HACKATHON_TEAM_NOT_REGISTERED, 'Xakaton topshiriqlarini bajarish uchun jamoada bo\'lishingiz shart.');
+      }
+      session = await TeamChallenge.findOne({ teamId: team._id, challengeId, status: 'active' });
+    } else {
+      session = await ChallengeSession.findOne({ userId, challengeId, status: 'active' });
+    }
+
     if (!session) {
       throw new AppError(ErrorCatalog.CTF_SESSION_NOT_FOUND);
     }
@@ -304,16 +361,21 @@ export const unlockChallengeHint = async (req, res, next) => {
         sq.pointsAwarded = Math.round(sq.pointsAwarded * 0.8);
       });
 
-      // Deduct from Team
-      await Team.findByIdAndUpdate(teamId, {
-        $inc: { points: -penalty }
-      });
+      if (mode === 'hackathon') {
+        // Deduct from Team
+        await Team.findByIdAndUpdate(team._id, {
+          $inc: { points: -penalty }
+        });
 
-      // Deduct from all team members
-      await User.updateMany(
-        { _id: { $in: req.team.members } },
-        { $inc: { points: -penalty } }
-      );
+        // Deduct from all team members
+        await User.updateMany(
+          { _id: { $in: team.members } },
+          { $inc: { points: -penalty } }
+        );
+
+        // Emit team score update
+        emitToTeam(team._id.toString(), 'team:score_update', { points: -penalty });
+      }
 
       // Deduct from current user statistics
       await User.findByIdAndUpdate(userId, {
@@ -321,10 +383,9 @@ export const unlockChallengeHint = async (req, res, next) => {
       });
 
       await LeaderboardService.recalculateUserRankings();
-      await LeaderboardService.recalculateTeamRankings();
-
-      // Emit team score update
-      emitToTeam(teamId, 'team:score_update', { points: -penalty });
+      if (mode === 'hackathon') {
+        await LeaderboardService.recalculateTeamRankings();
+      }
     }
 
     // Increment hints used statistic for current user
@@ -336,7 +397,7 @@ export const unlockChallengeHint = async (req, res, next) => {
 
     await AuditLog.create({
       userId,
-      teamId,
+      teamId: team ? team._id : null,
       action: 'UNLOCK_CHALLENGE_HINT',
       status: 'success',
       details: { challengeId, penaltyApplied: penalty },
@@ -361,10 +422,22 @@ export const submitQuestionAnswer = async (req, res, next) => {
   try {
     const { challengeId, questionId } = req.params;
     const { answer } = req.body;
-    const teamId = req.team._id;
     const userId = req.user.userId;
 
-    const session = await ChallengeSession.findOne({ teamId, challengeId, status: 'active' });
+    const mode = await getChallengeMode(challengeId);
+    let session = null;
+    let team = null;
+
+    if (mode === 'hackathon') {
+      team = await Team.findOne({ members: userId });
+      if (!team) {
+        throw new AppError(ErrorCatalog.HACKATHON_TEAM_NOT_REGISTERED, 'Xakaton topshiriqlarini bajarish uchun jamoada bo\'lishingiz shart.');
+      }
+      session = await TeamChallenge.findOne({ teamId: team._id, challengeId, status: 'active' });
+    } else {
+      session = await ChallengeSession.findOne({ userId, challengeId, status: 'active' });
+    }
+
     if (!session) {
       throw new AppError(ErrorCatalog.CTF_SESSION_NOT_FOUND);
     }
@@ -375,8 +448,14 @@ export const submitQuestionAnswer = async (req, res, next) => {
       throw new AppError(ErrorCatalog.CTF_SESSION_EXPIRED);
     }
 
-    if (session.failedAttempts >= 5) {
-      throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'Maksimal urinishlar sonidan oshib ketildi (5 ta xato urinish). Topshiriq bloklandi.');
+    // Check if user has exceeded attempts for this specific question
+    let qaIndex = session.questionAttempts.findIndex(qa => qa.questionId.toString() === questionId);
+    if (qaIndex === -1) {
+      session.questionAttempts.push({ questionId, failedAttempts: 0 });
+      qaIndex = session.questionAttempts.length - 1;
+    }
+    if (session.questionAttempts[qaIndex].failedAttempts >= 5) {
+      throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'Ushbu savol uchun maksimal urinishlar sonidan oshib ketildi (5 ta xato urinish). Savol bloklandi.');
     }
 
     // Check if already solved
@@ -394,19 +473,20 @@ export const submitQuestionAnswer = async (req, res, next) => {
     // Verify answer (bcrypt comparison)
     const isMatch = await bcrypt.compare(answer, question.answer);
     if (!isMatch) {
+      session.questionAttempts[qaIndex].failedAttempts += 1;
       session.failedAttempts = (session.failedAttempts || 0) + 1;
       await session.save();
 
       await AuditLog.create({
         userId,
-        teamId,
+        teamId: team ? team._id : null,
         action: 'SUBMIT_QUESTION_FAILURE',
         status: 'failure',
-        details: { challengeId, questionId, failedAttempts: session.failedAttempts },
+        details: { challengeId, questionId, failedAttempts: session.questionAttempts[qaIndex].failedAttempts },
         ipAddress: req.ip,
         userAgent: req.headers['user-agent']
       });
-      throw new AppError(ErrorCatalog.CTF_FLAG_INCORRECT, `Incorrect answer. Urinishlar: ${session.failedAttempts}/5`);
+      throw new AppError(ErrorCatalog.CTF_FLAG_INCORRECT, `Incorrect answer. Ushbu savol uchun urinishlar: ${session.questionAttempts[qaIndex].failedAttempts}/5`);
     }
 
     const originalScore = question.points || question.score || 100;
@@ -420,24 +500,27 @@ export const submitQuestionAnswer = async (req, res, next) => {
 
     await session.save();
 
-    // Award points to team
-    await Team.findByIdAndUpdate(teamId, {
-      $inc: { points: scoreAwarded }
-    });
+    if (mode === 'hackathon') {
+      // Award points to team
+      await Team.findByIdAndUpdate(team._id, {
+        $inc: { points: scoreAwarded }
+      });
 
-    // Award points to all team members
-    await User.updateMany(
-      { _id: { $in: req.team.members } },
-      { 
-        $inc: { points: scoreAwarded },
-        $set: { lastActive: new Date() }
-      }
-    );
+      // Award points to all team members
+      await User.updateMany(
+        { _id: { $in: team.members } },
+        { 
+          $inc: { points: scoreAwarded },
+          $set: { lastActive: new Date() }
+        }
+      );
+    }
 
     // Update user stats
     const statsField = `${challenge.difficulty}Solved`;
     await User.findByIdAndUpdate(userId, {
       $inc: {
+        points: mode === 'practice' ? scoreAwarded : 0,
         'statistics.totalSolved': 1,
         [`statistics.${statsField}`]: 1,
         'statistics.pointsEarned': scoreAwarded
@@ -445,12 +528,14 @@ export const submitQuestionAnswer = async (req, res, next) => {
     });
 
     await LeaderboardService.recalculateUserRankings();
-    await LeaderboardService.recalculateTeamRankings();
+    if (mode === 'hackathon') {
+      await LeaderboardService.recalculateTeamRankings();
+    }
 
     // Audit success
     await AuditLog.create({
       userId,
-      teamId,
+      teamId: team ? team._id : null,
       action: 'SUBMIT_QUESTION_SUCCESS',
       status: 'success',
       details: { challengeId, questionId, scoreAwarded },
@@ -460,7 +545,7 @@ export const submitQuestionAnswer = async (req, res, next) => {
 
     // Socket broadcasts
     const solveData = {
-      teamName: req.team.name,
+      teamName: team ? team.name : req.user.username,
       challengeTitle: challenge.title,
       questionTitle: question.title,
       points: scoreAwarded,
@@ -468,11 +553,13 @@ export const submitQuestionAnswer = async (req, res, next) => {
     };
 
     emitToGlobal('challenge:question_solved', solveData);
-    emitToTeam(teamId, 'team:score_update', { points: scoreAwarded });
+    if (mode === 'hackathon') {
+      emitToTeam(team._id.toString(), 'team:score_update', { points: scoreAwarded });
+    }
 
     res.status(200).json({
       success: true,
-      message: 'Correct answer! Points added to team score.',
+      message: mode === 'hackathon' ? 'Correct answer! Points added to team score.' : 'Correct answer! Points added to your profile.',
       data: {
         pointsAwarded: scoreAwarded
       }
@@ -486,10 +573,22 @@ export const submitChallengeFlag = async (req, res, next) => {
   try {
     const { challengeId, flagIndex } = req.params;
     const { flag } = req.body;
-    const teamId = req.team._id;
     const userId = req.user.userId;
 
-    const session = await ChallengeSession.findOne({ teamId, challengeId, status: 'active' });
+    const mode = await getChallengeMode(challengeId);
+    let session = null;
+    let team = null;
+
+    if (mode === 'hackathon') {
+      team = await Team.findOne({ members: userId });
+      if (!team) {
+        throw new AppError(ErrorCatalog.HACKATHON_TEAM_NOT_REGISTERED, 'Xakaton topshiriqlarini bajarish uchun jamoada bo\'lishingiz shart.');
+      }
+      session = await TeamChallenge.findOne({ teamId: team._id, challengeId, status: 'active' });
+    } else {
+      session = await ChallengeSession.findOne({ userId, challengeId, status: 'active' });
+    }
+
     if (!session) {
       throw new AppError(ErrorCatalog.CTF_SESSION_NOT_FOUND);
     }
@@ -498,10 +597,6 @@ export const submitChallengeFlag = async (req, res, next) => {
       session.status = 'expired';
       await session.save();
       throw new AppError(ErrorCatalog.CTF_SESSION_EXPIRED);
-    }
-
-    if (session.failedAttempts >= 5) {
-      throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'Maksimal urinishlar sonidan oshib ketildi (5 ta xato urinish). Topshiriq bloklandi.');
     }
 
     const index = parseInt(flagIndex, 10);
@@ -518,6 +613,16 @@ export const submitChallengeFlag = async (req, res, next) => {
       throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'Flag index out of range');
     }
 
+    // Check if user has exceeded attempts for this specific flag
+    let faIndex = session.flagAttempts.findIndex(fa => fa.flagIndex === index);
+    if (faIndex === -1) {
+      session.flagAttempts.push({ flagIndex: index, failedAttempts: 0 });
+      faIndex = session.flagAttempts.length - 1;
+    }
+    if (session.flagAttempts[faIndex].failedAttempts >= 5) {
+      throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'Ushbu flag uchun maksimal urinishlar sonidan oshib ketildi (5 ta xato urinish). Flag bloklandi.');
+    }
+
     // Check if flag index is already solved
     const alreadySolved = session.solvedFlags.some(sf => sf.flagIndex === index);
     if (alreadySolved) {
@@ -527,19 +632,20 @@ export const submitChallengeFlag = async (req, res, next) => {
     // Verify flag (bcrypt comparison)
     const isMatch = await bcrypt.compare(flag, challenge.flags[index]);
     if (!isMatch) {
+      session.flagAttempts[faIndex].failedAttempts += 1;
       session.failedAttempts = (session.failedAttempts || 0) + 1;
       await session.save();
 
       await AuditLog.create({
         userId,
-        teamId,
+        teamId: team ? team._id : null,
         action: 'SUBMIT_FLAG_FAILURE',
         status: 'failure',
-        details: { challengeId, flagIndex: index, failedAttempts: session.failedAttempts },
+        details: { challengeId, flagIndex: index, failedAttempts: session.flagAttempts[faIndex].failedAttempts },
         ipAddress: req.ip,
         userAgent: req.headers['user-agent']
       });
-      throw new AppError(ErrorCatalog.CTF_FLAG_INCORRECT, `Incorrect flag. Urinishlar: ${session.failedAttempts}/5`);
+      throw new AppError(ErrorCatalog.CTF_FLAG_INCORRECT, `Incorrect flag. Ushbu flag uchun urinishlar: ${session.flagAttempts[faIndex].failedAttempts}/5`);
     }
 
     // Record solved flag
@@ -557,34 +663,39 @@ export const submitChallengeFlag = async (req, res, next) => {
       session.status = 'completed';
       fullyCompleted = true;
 
-      // Award stars to team
-      await Team.findByIdAndUpdate(teamId, {
-        $inc: { stars: challenge.stars }
-      });
+      if (mode === 'hackathon') {
+        // Award stars to team
+        await Team.findByIdAndUpdate(team._id, {
+          $inc: { stars: challenge.stars }
+        });
 
-      // Award stars to all team members
-      await User.updateMany(
-        { _id: { $in: req.team.members } },
-        { 
-          $inc: { stars: challenge.stars },
-          $set: { lastActive: new Date() }
-        }
-      );
+        // Award stars to all team members
+        await User.updateMany(
+          { _id: { $in: team.members } },
+          { 
+            $inc: { stars: challenge.stars },
+            $set: { lastActive: new Date() }
+          }
+        );
+      }
 
       // Update stars statistics for the user
       await User.findByIdAndUpdate(userId, {
         $inc: {
+          stars: mode === 'practice' ? challenge.stars : 0,
           'statistics.starsEarned': challenge.stars,
-          'statistics.hackathonsJoined': 1
+          'statistics.hackathonsJoined': mode === 'hackathon' ? 1 : 0
         }
       });
 
       await LeaderboardService.recalculateUserRankings();
-      await LeaderboardService.recalculateTeamRankings();
+      if (mode === 'hackathon') {
+        await LeaderboardService.recalculateTeamRankings();
+      }
 
       await AuditLog.create({
         userId,
-        teamId,
+        teamId: team ? team._id : null,
         action: 'CHALLENGE_COMPLETE',
         status: 'success',
         details: { challengeId, starsAwarded: challenge.stars },
@@ -597,7 +708,7 @@ export const submitChallengeFlag = async (req, res, next) => {
 
     await AuditLog.create({
       userId,
-      teamId,
+      teamId: team ? team._id : null,
       action: 'SUBMIT_FLAG_SUCCESS',
       status: 'success',
       details: { challengeId, flagIndex: index },
@@ -620,18 +731,28 @@ export const submitChallengeFlag = async (req, res, next) => {
 export const finishChallenge = async (req, res, next) => {
   try {
     const { challengeId } = req.params;
-    const teamId = req.team._id;
     const userId = req.user.userId;
 
-    const session = await ChallengeSession.findOne({ teamId, challengeId, status: 'active' });
+    const mode = await getChallengeMode(challengeId);
+    let session = null;
+    let team = null;
+
+    if (mode === 'hackathon') {
+      team = await Team.findOne({ members: userId });
+      if (!team) {
+        throw new AppError(ErrorCatalog.HACKATHON_TEAM_NOT_REGISTERED, 'Xakaton topshiriqlarini bajarish uchun jamoada bo\'lishingiz shart.');
+      }
+      session = await TeamChallenge.findOne({ teamId: team._id, challengeId });
+    } else {
+      session = await ChallengeSession.findOne({ userId, challengeId });
+    }
+
     if (!session) {
       throw new AppError(ErrorCatalog.CTF_SESSION_NOT_FOUND);
     }
 
-    if (new Date() > session.expiresAt) {
-      session.status = 'expired';
-      await session.save();
-      throw new AppError(ErrorCatalog.CTF_SESSION_EXPIRED);
+    if (session.status !== 'active') {
+      throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'Sessiya allaqachon yakunlangan yoki muddati tugagan.');
     }
 
     const challenge = await CTF.findById(challengeId);
@@ -639,63 +760,62 @@ export const finishChallenge = async (req, res, next) => {
       throw new AppError(ErrorCatalog.CTF_NOT_FOUND);
     }
 
-    // Check if all flags are solved
-    const solvedIndexes = session.solvedFlags.map(sf => sf.flagIndex);
-    const allFlagsSolved = challenge.flags.every((_, i) => solvedIndexes.includes(i));
-
-    if (!allFlagsSolved) {
-      throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'You must solve all challenge flags before finishing.');
-    }
-
     // Complete session
     session.status = 'completed';
     await session.save();
 
-    // Award stars to team
-    await Team.findByIdAndUpdate(teamId, {
-      $inc: { stars: challenge.stars }
-    });
+    if (mode === 'hackathon') {
+      // Award stars to team
+      await Team.findByIdAndUpdate(team._id, {
+        $inc: { stars: challenge.stars }
+      });
 
-    // Award stars to all team members
-    await User.updateMany(
-      { _id: { $in: req.team.members } },
-      { 
-        $inc: { stars: challenge.stars },
-        $set: { lastActive: new Date() }
-      }
-    );
+      // Award stars to all team members
+      await User.updateMany(
+        { _id: { $in: team.members } },
+        { 
+          $inc: { stars: challenge.stars },
+          $set: { lastActive: new Date() }
+        }
+      );
+    }
 
-    // Update stars statistics for the user
+    // Update stats for the user
     await User.findByIdAndUpdate(userId, {
       $inc: {
+        stars: mode === 'practice' ? challenge.stars : 0,
         'statistics.starsEarned': challenge.stars,
-        'statistics.hackathonsJoined': 1
+        'statistics.hackathonsJoined': mode === 'hackathon' ? 1 : 0
       }
     });
 
     await LeaderboardService.recalculateUserRankings();
-    await LeaderboardService.recalculateTeamRankings();
+    if (mode === 'hackathon') {
+      await LeaderboardService.recalculateTeamRankings();
+    }
 
     await AuditLog.create({
       userId,
-      teamId,
+      teamId: team ? team._id : null,
       action: 'CHALLENGE_COMPLETE',
       status: 'success',
-      details: { challengeId, starsAwarded: challenge.stars },
+      details: { challengeId, starsAwarded: challenge.stars, manualFinish: true },
       ipAddress: req.ip,
       userAgent: req.headers['user-agent']
     });
 
     // WebSockets update
     const completeData = {
-      teamName: req.team.name,
+      teamName: team ? team.name : req.user.username,
       challengeTitle: challenge.title,
       stars: challenge.stars,
       completedAt: new Date()
     };
 
     emitToGlobal('challenge:completed', completeData);
-    emitToTeam(teamId, 'team:stars_update', { stars: challenge.stars });
+    if (mode === 'hackathon') {
+      emitToTeam(team._id.toString(), 'team:stars_update', { stars: challenge.stars });
+    }
 
     res.status(200).json({
       success: true,

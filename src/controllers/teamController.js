@@ -184,3 +184,88 @@ export const registerForHackathon = async (req, res, next) => {
     next(error);
   }
 };
+
+export const leaveTeam = async (req, res, next) => {
+  try {
+    const userId = req.user.userId;
+
+    const team = await Team.findOne({ members: userId });
+    if (!team) {
+      throw new AppError(ErrorCatalog.TEAM_NOT_FOUND, 'Siz hech qanday jamoaga a\'zo emassiz.');
+    }
+
+    // Check if the team is currently in an active or finished hackathon
+    if (team.hackathonsJoined && team.hackathonsJoined.length > 0) {
+      const activeHackathons = await Hackathon.find({
+        _id: { $in: team.hackathonsJoined },
+        status: { $in: ['running', 'finished'] }
+      });
+      if (activeHackathons.length > 0) {
+        throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'Xakaton boshlangan yoki yakunlangan vaqtda jamoani tark etish taqiqlanadi.');
+      }
+    }
+
+    const isLeader = team.leaderId.toString() === userId;
+
+    if (team.members.length === 1) {
+      // Last member leaving - disband/delete team completely
+      await Team.findByIdAndDelete(team._id);
+
+      await User.findByIdAndUpdate(userId, {
+        $pull: { roles: { $in: ['team_member', 'team_leader'] } }
+      });
+
+      await AuditLog.create({
+        userId,
+        teamId: team._id,
+        action: 'TEAM_LEAVE_DISBAND',
+        status: 'success',
+        details: { teamName: team.name },
+        ipAddress: req.ip,
+        userAgent: req.headers['user-agent']
+      });
+    } else {
+      // Remove member
+      team.members = team.members.filter(m => m.toString() !== userId);
+
+      if (isLeader) {
+        // Appoint new leader
+        const newLeaderId = team.members[0];
+        team.leaderId = newLeaderId;
+
+        // Grant team_leader role to new leader
+        await User.findByIdAndUpdate(newLeaderId, {
+          $addToSet: { roles: 'team_leader' }
+        });
+      }
+
+      await team.save();
+
+      // Remove team roles from current user
+      await User.findByIdAndUpdate(userId, {
+        $pull: { roles: { $in: ['team_member', 'team_leader'] } }
+      });
+
+      await AuditLog.create({
+        userId,
+        teamId: team._id,
+        action: 'TEAM_LEAVE',
+        status: 'success',
+        details: { teamName: team.name, wasLeader: isLeader },
+        ipAddress: req.ip,
+        userAgent: req.headers['user-agent']
+      });
+    }
+
+    // Recalculate rankings
+    await LeaderboardService.recalculateUserRankings();
+    await LeaderboardService.recalculateTeamRankings();
+
+    res.status(200).json({
+      success: true,
+      message: 'Jamoani muvaffaqiyatli tark etdingiz.'
+    });
+  } catch (error) {
+    next(error);
+  }
+};

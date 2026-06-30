@@ -93,6 +93,10 @@ export const createHackathon = async (req, res, next) => {
   try {
     const { name, description, banner, coverImage, hackathonStart, hackathonEnd, maxTeams, challenges } = req.body;
 
+    if (new Date(hackathonEnd) <= new Date(hackathonStart)) {
+      throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'Xakaton yakunlanish vaqti boshlanish vaqtidan keyin bo\'lishi kerak.');
+    }
+
     const existing = await Hackathon.findOne({ name });
     if (existing) {
       throw new AppError(ErrorCatalog.HACKATHON_MAX_TEAMS_REACHED, 'Hackathon name already exists');
@@ -322,6 +326,12 @@ export const editHackathon = async (req, res, next) => {
     const hackathon = await Hackathon.findById(hackathonId);
     if (!hackathon) {
       throw new AppError(ErrorCatalog.HACKATHON_NOT_FOUND);
+    }
+
+    const start = hackathonStart !== undefined ? hackathonStart : hackathon.hackathonStart;
+    const end = hackathonEnd !== undefined ? hackathonEnd : hackathon.hackathonEnd;
+    if (new Date(end) <= new Date(start)) {
+      throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'Xakaton yakunlanish vaqti boshlanish vaqtidan keyin bo\'lishi kerak.');
     }
 
     if (name && name !== hackathon.name) {

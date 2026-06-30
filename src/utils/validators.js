@@ -56,8 +56,8 @@ export const hackathonCreateSchema = Joi.object({
   description: Joi.string().required(),
   banner: Joi.string().allow(''),
   coverImage: Joi.string().allow(''),
-  hackathonStart: Joi.date().iso().required(),
-  hackathonEnd: Joi.date().iso().greater(Joi.ref('hackathonStart')).required(),
+  hackathonStart: Joi.date().required(),
+  hackathonEnd: Joi.date().required(),
   maxTeams: Joi.number().integer().min(2).max(1000).required(),
   challenges: Joi.array().items(Joi.string().hex().length(24)).default([])
 });
@@ -67,8 +67,8 @@ export const hackathonUpdateSchema = Joi.object({
   description: Joi.string().required(),
   banner: Joi.string().allow(''),
   coverImage: Joi.string().allow(''),
-  hackathonStart: Joi.date().iso().required(),
-  hackathonEnd: Joi.date().iso().greater(Joi.ref('hackathonStart')).required(),
+  hackathonStart: Joi.date().required(),
+  hackathonEnd: Joi.date().required(),
   maxTeams: Joi.number().integer().min(2).max(1000).required(),
   challenges: Joi.array().items(Joi.string().hex().length(24)).default([]),
   status: Joi.string().valid('open', 'closed', 'running', 'finished').optional()
