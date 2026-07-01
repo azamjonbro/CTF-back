@@ -1,8 +1,12 @@
 import express from 'express';
 import { getHackathons, getHackathonDetails, getHackathonChallenges, getHackathonStandings, getNews, getHackathonRegisteredTeams } from '../controllers/hackathonController.js';
 import { authenticate, optionalAuthenticate } from '../middlewares/auth.js';
+import { syncHackathonStatuses } from '../middlewares/hackathonSync.js';
 
 const router = express.Router();
+
+// Apply dynamic status sync middleware to all hackathon routes
+router.use(syncHackathonStatuses);
 
 // Public routes
 router.get('/', getHackathons);

@@ -18,9 +18,9 @@ export const initCronJobs = () => {
     }
   });
 
-  // Job 2: Hackathon Status Updates (runs every 10 minutes)
+  // Job 2: Hackathon Status Updates (runs every minute)
   // Transition status based on start/end dates
-  cron.schedule('*/10 * * * *', async () => {
+  cron.schedule('* * * * *', async () => {
     logger.info('Cron Action: Checking and updating hackathon lifecycles...');
     try {
       const now = new Date();
