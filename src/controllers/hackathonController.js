@@ -19,10 +19,10 @@ export const getHackathons = async (req, res, next) => {
       let countdownSeconds = 0;
       let phase = 'unknown';
 
-      if (h.status === 'open' || h.status === 'closed') {
+      if (h.status === 'upcoming') {
         countdownSeconds = Math.max(0, Math.floor((h.hackathonStart.getTime() - now.getTime()) / 1000));
         phase = 'hackathon_starts';
-      } else if (h.status === 'running') {
+      } else if (h.status === 'active') {
         countdownSeconds = Math.max(0, Math.floor((h.hackathonEnd.getTime() - now.getTime()) / 1000));
         phase = 'hackathon_ends';
       } else {
@@ -73,8 +73,8 @@ export const getHackathonChallenges = async (req, res, next) => {
       throw new AppError(ErrorCatalog.HACKATHON_NOT_FOUND);
     }
 
-    if (hackathon.status !== 'running') {
-      throw new AppError(ErrorCatalog.HACKATHON_NOT_ACTIVE, 'Xakaton topshiriqlari faqat musobaqa faol (running) bo\'lgan vaqtda ochiq bo\'ladi.');
+    if (hackathon.status !== 'active') {
+      throw new AppError(ErrorCatalog.HACKATHON_NOT_ACTIVE, 'Xakaton topshiriqlari faqat musobaqa faol (active) bo\'lgan vaqtda ochiq bo\'ladi.');
     }
 
     // Verify user team is registered

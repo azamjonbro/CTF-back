@@ -1,8 +1,10 @@
 import User from '../models/User.js';
 import Team from '../models/Team.js';
 import ChallengeSession from '../models/ChallengeSession.js';
+import TeamChallenge from '../models/TeamChallenge.js';
 import Hackathon from '../models/Hackathon.js';
 import mongoose from 'mongoose';
+import { emitToGlobal } from '../config/socket.js';
 
 export class LeaderboardService {
 
@@ -29,6 +31,7 @@ export class LeaderboardService {
     if (bulkOps.length > 0) {
       await User.bulkWrite(bulkOps);
     }
+    emitToGlobal('leaderboard:refresh', { type: 'user' });
   }
 
   static async recalculateTeamRankings() {
@@ -53,6 +56,7 @@ export class LeaderboardService {
     if (bulkOps.length > 0) {
       await Team.bulkWrite(bulkOps);
     }
+    emitToGlobal('leaderboard:refresh', { type: 'team' });
   }
 
   // Get user leaderboard with ranks, surroundings, and changes
@@ -172,7 +176,7 @@ export class LeaderboardService {
     const totalQuestionsCount = totalQuestionsCountResult[0]?.total || 1;
 
     // Aggregate completed challenge sessions for teams in this hackathon
-    const leaderboard = await ChallengeSession.aggregate([
+    const leaderboard = await TeamChallenge.aggregate([
       { 
         $match: { 
           challengeId: { $in: challengeIds }

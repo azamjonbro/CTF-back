@@ -8,6 +8,7 @@ import ChallengeSession from '../models/ChallengeSession.js';
 import { AppError, ErrorCatalog } from '../utils/errors.js';
 import bcrypt from 'bcryptjs';
 import { LeaderboardService } from '../services/leaderboardService.js';
+import { LifecycleService } from '../services/lifecycleService.js';
 
 // Get Admin System Dashboard Statistics
 export const getDashboardStats = async (req, res, next) => {
@@ -118,10 +119,11 @@ export const createHackathon = async (req, res, next) => {
       hackathonEnd,
       maxTeams,
       challenges: challenges || [],
-      status: 'open'
+      status: 'upcoming'
     });
 
     await hackathon.save();
+    await LifecycleService.syncHackathonLifecycle();
 
     // Auto-create news announcement
     const news = new News({
@@ -362,6 +364,7 @@ export const editHackathon = async (req, res, next) => {
     }
 
     await hackathon.save();
+    await LifecycleService.syncHackathonLifecycle();
 
     await AuditLog.create({
       userId: req.user.userId,

@@ -45,6 +45,15 @@ const ALLOWED_MIME_TYPES = {
 const fileFilter = (req, file, cb) => {
   const ext = path.extname(file.originalname).toLowerCase();
   const mimeType = file.mimetype;
+  const isStaffOrAdmin = req.user && (req.user.roles && (req.user.roles.includes('admin') || req.user.roles.includes('staff') || req.user.roles.includes('support')));
+
+  if (!isStaffOrAdmin) {
+    // Standard users can only upload images
+    const allowedImages = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+    if (!allowedImages.includes(mimeType)) {
+      return cb(new AppError(ErrorCatalog.AUTH_FORBIDDEN, 'Standard users are only permitted to upload images.'));
+    }
+  }
 
   // Validate Mime type & Extension match
   const allowedExtensions = ALLOWED_MIME_TYPES[mimeType];

@@ -4,6 +4,7 @@ import AuditLog from '../models/AuditLog.js';
 import Team from '../models/Team.js';
 import CTF from '../models/CTF.js';
 import ChallengeSession from '../models/ChallengeSession.js';
+import TeamChallenge from '../models/TeamChallenge.js';
 import Hackathon from '../models/Hackathon.js';
 import { LeaderboardService } from '../services/leaderboardService.js';
 import { AppError, ErrorCatalog } from '../utils/errors.js';
@@ -11,11 +12,20 @@ import { AppError, ErrorCatalog } from '../utils/errors.js';
 // Helper to get CTF history for a user
 const getCtfHistory = async (userId) => {
   const team = await Team.findOne({ members: userId });
-  if (!team) return [];
 
-  // Find all challenge sessions for this team
-  const sessions = await ChallengeSession.find({ teamId: team._id })
+  // 1. Fetch practice sessions (belonging to the user)
+  const practiceSessions = await ChallengeSession.find({ userId })
     .populate('challengeId', 'title category difficulty stars questions');
+
+  // 2. Fetch team/hackathon sessions (belonging to the team)
+  let hackathonSessions = [];
+  if (team) {
+    hackathonSessions = await TeamChallenge.find({ teamId: team._id })
+      .populate('challengeId', 'title category difficulty stars questions');
+  }
+
+  // Combine both practice and team sessions
+  const sessions = [...practiceSessions, ...hackathonSessions];
 
   // Map and format the history
   const history = sessions.map(session => {

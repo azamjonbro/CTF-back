@@ -35,8 +35,8 @@ const hackathonSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['open', 'closed', 'running', 'finished'],
-    default: 'open',
+    enum: ['upcoming', 'active', 'finished'],
+    default: 'upcoming',
     index: true
   },
   challenges: [{

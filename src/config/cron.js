@@ -4,6 +4,7 @@ import { LeaderboardService } from '../services/leaderboardService.js';
 import Hackathon from '../models/Hackathon.js';
 import ChallengeSession from '../models/ChallengeSession.js';
 import { emitToTeam } from './socket.js';
+import { LifecycleService } from '../services/lifecycleService.js';
 
 export const initCronJobs = () => {
   // Job 1: Hourly global rank calculation fallback (runs at minute 0)
@@ -19,32 +20,9 @@ export const initCronJobs = () => {
   });
 
   // Job 2: Hackathon Status Updates (runs every minute)
-  // Transition status based on start/end dates
   cron.schedule('* * * * *', async () => {
     logger.info('Cron Action: Checking and updating hackathon lifecycles...');
-    try {
-      const now = new Date();
-      
-      // 1. open/closed -> running
-      const startResult = await Hackathon.updateMany(
-        { status: { $in: ['open', 'closed'] }, hackathonStart: { $lte: now } },
-        { $set: { status: 'running' } }
-      );
-      if (startResult.modifiedCount > 0) {
-        logger.info(`Cron: Started ${startResult.modifiedCount} hackathons.`);
-      }
-
-      // 2. running -> finished
-      const endResult = await Hackathon.updateMany(
-        { status: 'running', hackathonEnd: { $lte: now } },
-        { $set: { status: 'finished' } }
-      );
-      if (endResult.modifiedCount > 0) {
-        logger.info(`Cron: Finished ${endResult.modifiedCount} hackathons.`);
-      }
-    } catch (error) {
-      logger.error(`Cron error during hackathon lifecycle updates: ${error.message}`);
-    }
+    await LifecycleService.syncHackathonLifecycle();
   });
 
   // Job 3: Expired Challenge Sessions check (runs every minute)

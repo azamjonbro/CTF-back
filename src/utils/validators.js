@@ -72,7 +72,7 @@ export const hackathonUpdateSchema = Joi.object({
   hackathonEnd: Joi.date().required(),
   maxTeams: Joi.number().integer().min(2).max(1000).required(),
   challenges: Joi.array().items(Joi.string().hex().length(24)).default([]),
-  status: Joi.string().valid('open', 'closed', 'running', 'finished').optional()
+  status: Joi.string().valid('upcoming', 'active', 'finished').optional()
 });
 
 export const submitAnswerSchema = Joi.object({

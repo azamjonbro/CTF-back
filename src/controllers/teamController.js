@@ -145,8 +145,8 @@ export const registerForHackathon = async (req, res, next) => {
       throw new AppError(ErrorCatalog.HACKATHON_NOT_FOUND);
     }
 
-    if (hackathon.status !== 'open') {
-      throw new AppError(ErrorCatalog.HACKATHON_REGISTRATION_CLOSED, 'Ro\'yxatdan o\'tish faqat xakaton ochiq (open) holatida bo\'lgandagina mumkin.');
+    if (hackathon.status !== 'upcoming') {
+      throw new AppError(ErrorCatalog.HACKATHON_REGISTRATION_CLOSED, 'Ro\'yxatdan o\'tish faqat xakaton kelgusi (upcoming) holatida bo\'lgandagina mumkin.');
     }
 
     // Check capacity limit
@@ -198,7 +198,7 @@ export const leaveTeam = async (req, res, next) => {
     if (team.hackathonsJoined && team.hackathonsJoined.length > 0) {
       const activeHackathons = await Hackathon.find({
         _id: { $in: team.hackathonsJoined },
-        status: { $in: ['running', 'finished'] }
+        status: { $in: ['active', 'finished'] }
       });
       if (activeHackathons.length > 0) {
         throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'Xakaton boshlangan yoki yakunlangan vaqtda jamoani tark etish taqiqlanadi.');

@@ -18,7 +18,6 @@ const userStatisticsSchema = new mongoose.Schema({
   hardSolved: { type: Number, default: 0 },
   starsEarned: { type: Number, default: 0 },
   pointsEarned: { type: Number, default: 0 },
-  hintsUsed: { type: Number, default: 0 },
   teamsJoined: { type: Number, default: 0 },
   hackathonsJoined: { type: Number, default: 0 },
   hackathonsWon: { type: Number, default: 0 }
@@ -64,6 +63,10 @@ const userSchema = new mongoose.Schema({
   },
   registrationDate: { type: Date, default: Date.now },
   lastActive: { type: Date, default: Date.now },
+  completedCtfs: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'CTF'
+  }],
   devices: [deviceSchema],
   statistics: {
     type: userStatisticsSchema,
