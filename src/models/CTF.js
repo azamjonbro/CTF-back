@@ -4,7 +4,7 @@ const questionSchema = new mongoose.Schema({
   title: { type: String, required: true, trim: true },
   description: { type: String, required: true },
   answer: { type: String, required: true }, // bcrypt hashed
-  points: { type: Number, required: true, min: 10 },
+  points: { type: Number, required: true, default: 10, min: 10 },
   hint: { type: String, default: '' }
 });
 
@@ -26,6 +26,11 @@ const ctfSchema = new mongoose.Schema({
   stars: {
     type: Number,
     required: true
+  },
+  points: {
+    type: Number,
+    required: true,
+    default: 100
   },
   category: {
     type: String,
