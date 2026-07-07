@@ -4,8 +4,8 @@ import User from '../models/User.js';
 
 const seedAdminUser = async () => {
   try {
-    const adminEmail = 'adminahror@admin.com';
-    const adminUsername = 'adminahror@admin.com';
+    const adminEmail = 'superadmin@ctf.com';
+    const adminUsername = 'superadmin';
     
     const existingAdmin = await User.findOne({ 
       $or: [{ email: adminEmail }, { username: adminUsername }] 
@@ -15,8 +15,8 @@ const seedAdminUser = async () => {
       const admin = new User({
         username: adminUsername,
         email: adminEmail,
-        passwordHash: 'FuCK@ThisPass',
-        name: 'Ahror',
+        passwordHash: 'SuperAdminSecurePassword2026!',
+        name: 'Super',
         surname: 'Admin',
         roles: ['admin']
       });

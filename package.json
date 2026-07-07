@@ -7,7 +7,8 @@
   "scripts": {
     "start": "node src/app.js",
     "dev": "nodemon src/app.js",
-    "test": "cross-env NODE_ENV=test mocha tests/**/*.test.js --exit"
+    "test": "cross-env NODE_ENV=test mocha tests/**/*.test.js --exit",
+    "db:reset": "node src/scripts/resetDb.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
