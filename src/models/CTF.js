@@ -8,6 +8,11 @@ const questionSchema = new mongoose.Schema({
   hint: { type: String, default: '' }
 });
 
+const flagSchema = new mongoose.Schema({
+  flag: { type: String, required: true },
+  points: { type: Number, required: true, default: 100, min: 0 }
+});
+
 const ctfSchema = new mongoose.Schema({
   title: {
     type: String,
@@ -66,7 +71,7 @@ const ctfSchema = new mongoose.Schema({
     default: ''
   },
   flags: {
-    type: [String],
+    type: [flagSchema],
     required: true,
     validate: {
       validator: function (val) {

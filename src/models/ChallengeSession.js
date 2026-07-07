@@ -51,6 +51,7 @@ const challengeSessionSchema = new mongoose.Schema({
   solvedQuestions: [solvedQuestionSchema],
   solvedFlags: [{
     flagIndex: { type: Number, required: true },
+    pointsAwarded: { type: Number, required: true, default: 100 },
     solvedAt: { type: Date, default: Date.now }
   }],
   questionAttempts: [questionAttemptSchema],

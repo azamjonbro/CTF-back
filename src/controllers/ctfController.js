@@ -63,8 +63,13 @@ export const getChallenges = async (req, res, next) => {
       query._id = { $nin: hackathonChallengeIds };
     }
 
+    let selectFields = 'title shortDescription longDescription difficulty stars category author status questions attachments image';
+    if (isStaffOrAdmin) {
+      selectFields += ' flags';
+    }
+
     const challenges = await CTF.find(query)
-      .select('title shortDescription longDescription difficulty stars category author status questions attachments image')
+      .select(selectFields)
       .populate('author', 'username');
 
     res.status(200).json({
@@ -118,6 +123,7 @@ export const getChallengeDetails = async (req, res, next) => {
             attachments: challenge.attachments || [],
             questionsCount: challenge.questions.length,
             flagsCount: challenge.flags.length,
+            flags: challenge.flags.map(f => ({ points: f.points !== undefined ? f.points : 100 })),
             hasHint: !!challenge.hint
           }
         }
@@ -170,6 +176,7 @@ export const getChallengeDetails = async (req, res, next) => {
         hintUsed: session.hintUsed || false,
         challengeHint: session.hintUsed ? challenge.hint : null,
         questions: questionsWithoutAnswers,
+        flags: challenge.flags.map(f => ({ points: f.points !== undefined ? f.points : 100 })),
         solvedFlags: session.solvedFlags || [],
         flagsCount: challenge.flags.length
       }
@@ -795,8 +802,12 @@ export const submitChallengeFlag = async (req, res, next) => {
       throw new AppError(ErrorCatalog.CTF_ALREADY_SOLVED, 'Flag already verified');
     }
 
-    // Verify flag (bcrypt comparison)
-    const isMatch = await bcrypt.compare(flag, challenge.flags[index]);
+    // Verify flag (bcrypt comparison supporting both string and object flags)
+    const targetFlagObj = challenge.flags[index];
+    const targetFlagHash = typeof targetFlagObj === 'object' && targetFlagObj !== null ? targetFlagObj.flag : targetFlagObj;
+    const flagPoints = typeof targetFlagObj === 'object' && targetFlagObj !== null && targetFlagObj.points !== undefined ? targetFlagObj.points : 100;
+
+    const isMatch = await bcrypt.compare(flag, targetFlagHash);
     if (!isMatch) {
       session.flagAttempts[faIndex].failedAttempts += 1;
       session.failedAttempts = (session.failedAttempts || 0) + 1;
@@ -814,131 +825,175 @@ export const submitChallengeFlag = async (req, res, next) => {
       throw new AppError(ErrorCatalog.CTF_FLAG_INCORRECT, `Incorrect flag. Ushbu flag uchun urinishlar: ${session.flagAttempts[faIndex].failedAttempts}/5`);
     }
 
+    const flagPointsAwarded = session.hintUsed ? Math.round(flagPoints * 0.8) : flagPoints;
+
     // Record solved flag
-    session.solvedFlags.push({
+    const solvedObj = {
       flagIndex: index,
+      pointsAwarded: flagPointsAwarded,
       solvedAt: new Date()
-    });
+    };
+
+    let updateResult;
+    if (mode === 'hackathon') {
+      updateResult = await TeamChallenge.updateOne(
+        { 
+          _id: session._id, 
+          status: 'active',
+          'solvedFlags.flagIndex': { $ne: index }
+        },
+        { 
+          $push: { solvedFlags: solvedObj } 
+        }
+      );
+    } else {
+      updateResult = await ChallengeSession.updateOne(
+        { 
+          _id: session._id, 
+          status: 'active',
+          'solvedFlags.flagIndex': { $ne: index }
+        },
+        { 
+          $push: { solvedFlags: solvedObj } 
+        }
+      );
+    }
+
+    if (updateResult.modifiedCount === 0) {
+      throw new AppError(ErrorCatalog.CTF_ALREADY_SOLVED, 'Ushbu flag allaqachon yechilgan.');
+    }
+
+    session.solvedFlags.push(solvedObj);
+
+    // Award points immediately
+    if (mode === 'hackathon') {
+      await Team.findByIdAndUpdate(team._id, {
+        $inc: { points: flagPointsAwarded }
+      });
+
+      await User.updateMany(
+        { _id: { $in: team.members } },
+        { 
+          $inc: { 
+            points: flagPointsAwarded,
+            'statistics.pointsEarned': flagPointsAwarded
+          },
+          $set: { lastActive: new Date() }
+        }
+      );
+
+      emitToTeam(team._id.toString(), 'team:score', { 
+        teamId: team._id.toString(),
+        points: team.points + flagPointsAwarded,
+        stars: team.stars
+      });
+    } else {
+      await User.findByIdAndUpdate(userId, {
+        $inc: {
+          points: flagPointsAwarded,
+          'statistics.pointsEarned': flagPointsAwarded
+        }
+      });
+    }
 
     // Check if all flags are solved
     const solvedIndexes = session.solvedFlags.map(sf => sf.flagIndex);
     const allFlagsSolved = challenge.flags.every((_, i) => (solvedIndexes.includes(i) || i === index));
     let fullyCompleted = false;
-    const originalChallengePoints = challenge.points !== undefined ? challenge.points : 100;
-    const challengePointsAwarded = session.hintUsed ? Math.round(originalChallengePoints * 0.8) : originalChallengePoints;
 
     if (allFlagsSolved) {
-      // Complete the session atomically to prevent race conditions
-      let updateResult;
+      let completeResult;
       if (mode === 'hackathon') {
-        updateResult = await TeamChallenge.updateOne(
+        completeResult = await TeamChallenge.updateOne(
           { _id: session._id, status: 'active' },
           { $set: { status: 'completed' } }
         );
       } else {
-        updateResult = await ChallengeSession.updateOne(
+        completeResult = await ChallengeSession.updateOne(
           { _id: session._id, status: 'active' },
           { $set: { status: 'completed' } }
         );
       }
 
-      if (updateResult.modifiedCount === 0) {
-        throw new AppError(ErrorCatalog.CTF_ALREADY_SOLVED, 'Ushbu challenge allaqachon yechib bo\'lingan.');
-      }
+      if (completeResult.modifiedCount > 0) {
+        session.status = 'completed';
+        fullyCompleted = true;
 
-      session.status = 'completed';
-      fullyCompleted = true;
+        if (mode === 'hackathon') {
+          await Team.findByIdAndUpdate(team._id, {
+            $inc: { stars: challenge.stars }
+          });
 
-      if (mode === 'hackathon') {
-        // Award stars and points to team
-        await Team.findByIdAndUpdate(team._id, {
-          $inc: { 
-            stars: challenge.stars,
-            points: challengePointsAwarded
-          }
-        });
-
-        // Award stars, points, and update stats for ALL team members
-        const statsField = `${challenge.difficulty}Solved`;
-        for (const memberId of team.members) {
-          const member = await User.findById(memberId);
-          if (!member) continue;
-
-          const memberAlreadyCompleted = member.completedCtfs && member.completedCtfs.some(id => id.toString() === challengeId.toString());
-
-          const updateData = {
-            $set: { lastActive: new Date() },
-            $inc: {
-              stars: challenge.stars,
-              points: challengePointsAwarded,
-              'statistics.starsEarned': challenge.stars,
-              'statistics.pointsEarned': challengePointsAwarded,
-              'statistics.hackathonsJoined': 1
-            }
-          };
-
-          if (!memberAlreadyCompleted) {
-            updateData.$addToSet = { completedCtfs: challengeId };
-            updateData.$inc['statistics.totalSolved'] = 1;
-            updateData.$inc[`statistics.${statsField}`] = 1;
-          }
-
-          await User.findByIdAndUpdate(memberId, updateData);
-        }
-
-        // Emit team score update
-        emitToTeam(team._id.toString(), 'team:score', { 
-          teamId: team._id.toString(),
-          points: team.points + challengePointsAwarded,
-          stars: team.stars + challenge.stars
-        });
-      } else {
-        // Practice mode
-        const user = await User.findById(userId);
-        if (user) {
-          const alreadyCompleted = user.completedCtfs && user.completedCtfs.some(id => id.toString() === challengeId.toString());
           const statsField = `${challenge.difficulty}Solved`;
-          const updateData = {
-            $inc: {
-              stars: challenge.stars,
-              points: challengePointsAwarded,
-              'statistics.starsEarned': challenge.stars,
-              'statistics.pointsEarned': challengePointsAwarded
-            }
-          };
+          for (const memberId of team.members) {
+            const member = await User.findById(memberId);
+            if (!member) continue;
 
-          if (!alreadyCompleted) {
-            updateData.$addToSet = { completedCtfs: challengeId };
-            updateData.$inc['statistics.totalSolved'] = 1;
-            updateData.$inc[`statistics.${statsField}`] = 1;
+            const memberAlreadyCompleted = member.completedCtfs && member.completedCtfs.some(id => id.toString() === challengeId.toString());
+
+            const updateData = {
+              $set: { lastActive: new Date() },
+              $inc: {
+                stars: challenge.stars,
+                'statistics.starsEarned': challenge.stars,
+                'statistics.hackathonsJoined': 1
+              }
+            };
+
+            if (!memberAlreadyCompleted) {
+              updateData.$addToSet = { completedCtfs: challengeId };
+              updateData.$inc['statistics.totalSolved'] = 1;
+              updateData.$inc[`statistics.${statsField}`] = 1;
+            }
+
+            await User.findByIdAndUpdate(memberId, updateData);
           }
 
-          await User.findByIdAndUpdate(userId, updateData);
+          emitToTeam(team._id.toString(), 'team:score', { 
+            teamId: team._id.toString(),
+            points: team.points + flagPointsAwarded,
+            stars: team.stars + challenge.stars
+          });
+        } else {
+          const user = await User.findById(userId);
+          if (user) {
+            const alreadyCompleted = user.completedCtfs && user.completedCtfs.some(id => id.toString() === challengeId.toString());
+            const statsField = `${challenge.difficulty}Solved`;
+            const updateData = {
+              $inc: {
+                stars: challenge.stars,
+                'statistics.starsEarned': challenge.stars
+              }
+            };
+
+            if (!alreadyCompleted) {
+              updateData.$addToSet = { completedCtfs: challengeId };
+              updateData.$inc['statistics.totalSolved'] = 1;
+              updateData.$inc[`statistics.${statsField}`] = 1;
+            }
+
+            await User.findByIdAndUpdate(userId, updateData);
+          }
         }
-      }
 
-      await LeaderboardService.recalculateUserRankings();
-      if (mode === 'hackathon') {
-        await LeaderboardService.recalculateTeamRankings();
-        emitToGlobal('leaderboard:refresh', {});
-      }
+        await LeaderboardService.recalculateUserRankings();
+        if (mode === 'hackathon') {
+          await LeaderboardService.recalculateTeamRankings();
+          emitToGlobal('leaderboard:refresh', {});
+        }
 
-      await AuditLog.create({
-        userId,
-        teamId: team ? team._id : null,
-        action: 'CHALLENGE_COMPLETE',
-        status: 'success',
-        details: { challengeId, starsAwarded: challenge.stars },
-        ipAddress: req.ip,
-        userAgent: req.headers['user-agent']
-      });
+        await AuditLog.create({
+          userId,
+          teamId: team ? team._id : null,
+          action: 'CHALLENGE_COMPLETE',
+          status: 'success',
+          details: { challengeId, starsAwarded: challenge.stars },
+          ipAddress: req.ip,
+          userAgent: req.headers['user-agent']
+        });
+      }
     }
 
-    // Record solved flag
-    session.solvedFlags.push({
-      flagIndex: index,
-      solvedAt: new Date()
-    });
     await session.save();
 
     await AuditLog.create({
@@ -946,17 +1001,16 @@ export const submitChallengeFlag = async (req, res, next) => {
       teamId: team ? team._id : null,
       action: 'SUBMIT_FLAG_SUCCESS',
       status: 'success',
-      details: { challengeId, flagIndex: index },
+      details: { challengeId, flagIndex: index, pointsAwarded: flagPointsAwarded },
       ipAddress: req.ip,
       userAgent: req.headers['user-agent']
     });
 
-    // WebSockets update
     const solveData = {
       teamName: team ? team.name : req.user.username,
       challengeTitle: challenge.title,
       questionTitle: `Flag ${index + 1}`,
-      points: fullyCompleted ? challengePointsAwarded : 0,
+      points: flagPointsAwarded,
       stars: fullyCompleted ? challenge.stars : 0,
       solvedAt: new Date()
     };
@@ -997,6 +1051,16 @@ export const finishChallenge = async (req, res, next) => {
       throw new AppError(ErrorCatalog.CTF_SESSION_NOT_FOUND);
     }
 
+    if (session.status === 'completed') {
+      return res.status(200).json({
+        success: true,
+        message: 'Challenge finished successfully! Stars have been awarded.',
+        data: {
+          fullyCompleted: true
+        }
+      });
+    }
+
     if (session.status !== 'active') {
       throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'Sessiya allaqachon yakunlangan yoki muddati tugagan.');
     }
@@ -1006,7 +1070,13 @@ export const finishChallenge = async (req, res, next) => {
       throw new AppError(ErrorCatalog.CTF_NOT_FOUND);
     }
 
-    // Complete session atomically to prevent race conditions
+    const solvedIndexes = session.solvedFlags.map(sf => sf.flagIndex);
+    const allFlagsSolved = challenge.flags.every((_, i) => solvedIndexes.includes(i));
+    if (!allFlagsSolved) {
+      throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'Topshiriqni yakunlash uchun barcha flaglar yechilgan bo\'lishi kerak.');
+    }
+
+    // Complete session atomically
     let updateResult;
     if (mode === 'hackathon') {
       updateResult = await TeamChallenge.updateOne(
@@ -1027,21 +1097,12 @@ export const finishChallenge = async (req, res, next) => {
     session.status = 'completed';
     await session.save();
 
-    const originalChallengePoints = challenge.points !== undefined ? challenge.points : 100;
-    const challengePointsAwarded = session.hintUsed ? Math.round(originalChallengePoints * 0.8) : originalChallengePoints;
-
-    const statsField = `${challenge.difficulty}Solved`;
-
     if (mode === 'hackathon') {
-      // Award stars and points to team
       await Team.findByIdAndUpdate(team._id, {
-        $inc: { 
-          stars: challenge.stars,
-          points: challengePointsAwarded
-        }
+        $inc: { stars: challenge.stars }
       });
 
-      // Award stars, points, and update stats for ALL team members
+      const statsField = `${challenge.difficulty}Solved`;
       for (const memberId of team.members) {
         const member = await User.findById(memberId);
         if (!member) continue;
@@ -1052,9 +1113,7 @@ export const finishChallenge = async (req, res, next) => {
           $set: { lastActive: new Date() },
           $inc: {
             stars: challenge.stars,
-            points: challengePointsAwarded,
             'statistics.starsEarned': challenge.stars,
-            'statistics.pointsEarned': challengePointsAwarded,
             'statistics.hackathonsJoined': 1
           }
         };
@@ -1068,23 +1127,20 @@ export const finishChallenge = async (req, res, next) => {
         await User.findByIdAndUpdate(memberId, updateData);
       }
 
-      // Emit team score update
       emitToTeam(team._id.toString(), 'team:score', { 
         teamId: team._id.toString(),
-        points: team.points + challengePointsAwarded,
+        points: team.points,
         stars: team.stars + challenge.stars
       });
     } else {
-      // Practice mode
       const user = await User.findById(userId);
       if (user) {
         const alreadyCompleted = user.completedCtfs && user.completedCtfs.some(id => id.toString() === challengeId.toString());
+        const statsField = `${challenge.difficulty}Solved`;
         const updateData = {
           $inc: {
             stars: challenge.stars,
-            points: challengePointsAwarded,
-            'statistics.starsEarned': challenge.stars,
-            'statistics.pointsEarned': challengePointsAwarded
+            'statistics.starsEarned': challenge.stars
           }
         };
 
@@ -1114,12 +1170,11 @@ export const finishChallenge = async (req, res, next) => {
       userAgent: req.headers['user-agent']
     });
 
-    // WebSockets update
     emitToGlobal('challenge:solved', {
       teamName: team ? team.name : req.user.username,
       challengeTitle: challenge.title,
       questionTitle: 'All Flags',
-      points: challengePointsAwarded,
+      points: 0,
       stars: challenge.stars,
       solvedAt: new Date()
     });

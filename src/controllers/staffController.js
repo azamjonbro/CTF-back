@@ -3,12 +3,23 @@ import AuditLog from '../models/AuditLog.js';
 import { AppError, ErrorCatalog } from '../utils/errors.js';
 import bcrypt from 'bcryptjs';
 
+const isBcryptHash = (str) => {
+  return typeof str === 'string' && /^\$2[ayb]\$[0-9]{2}\$[./A-Za-z0-9]{53}$/.test(str);
+};
+
 // Helper to hash flags
 const hashFlags = async (flags) => {
   const hashed = [];
-  for (const flag of flags) {
-    const salt = await bcrypt.genSalt(10);
-    hashed.push(await bcrypt.hash(flag, salt));
+  for (const f of flags) {
+    let flagValue = f.flag;
+    if (!isBcryptHash(flagValue)) {
+      const salt = await bcrypt.genSalt(10);
+      flagValue = await bcrypt.hash(flagValue, salt);
+    }
+    hashed.push({
+      flag: flagValue,
+      points: f.points !== undefined ? f.points : 100
+    });
   }
   return hashed;
 };
@@ -17,13 +28,16 @@ const hashFlags = async (flags) => {
 const hashQuestions = async (questions) => {
   const processed = [];
   for (const q of questions) {
-    const salt = await bcrypt.genSalt(10);
-    const hashedAnswer = await bcrypt.hash(q.answer, salt);
+    let answerValue = q.answer;
+    if (!isBcryptHash(answerValue)) {
+      const salt = await bcrypt.genSalt(10);
+      answerValue = await bcrypt.hash(answerValue, salt);
+    }
     processed.push({
       title: q.title,
       description: q.description,
-      answer: hashedAnswer,
-      points: q.points,
+      answer: answerValue,
+      points: q.points !== undefined ? q.points : 10,
       hint: q.hint || ''
     });
   }

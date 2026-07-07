@@ -32,8 +32,10 @@ const getCtfHistory = async (userId) => {
     if (!session.challengeId) return null;
     const challenge = session.challengeId;
     
-    // Sum points awarded for solved questions
-    const points = session.solvedQuestions.reduce((sum, sq) => sum + (sq.pointsAwarded || 0), 0);
+    // Sum points awarded for solved questions and flags
+    const qPoints = session.solvedQuestions ? session.solvedQuestions.reduce((sum, sq) => sum + (sq.pointsAwarded || 0), 0) : 0;
+    const fPoints = session.solvedFlags ? session.solvedFlags.reduce((sum, sf) => sum + (sf.pointsAwarded || 0), 0) : 0;
+    const points = qPoints + fPoints;
     
     // Total questions in challenge
     const totalQuestions = challenge.questions?.length || 0;

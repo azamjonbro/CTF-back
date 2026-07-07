@@ -57,7 +57,7 @@ describe('CTF Points, Penalties, and Task Count Integration Tests', () => {
       image: '',
       attachments: [],
       hint: 'Challenge-level hint context.',
-      flags: [flagBcrypt],
+      flags: [{ flag: flagBcrypt, points: 100 }],
       questions: [
         { title: 'Q1', description: 'Desc 1', answer: answerBcrypt, hint: 'Hint Q1' },
         { title: 'Q2', description: 'Desc 2', answer: answerBcrypt, hint: 'Hint Q2' },
