@@ -468,20 +468,7 @@ export const unlockChallengeHint = async (req, res, next) => {
       throw new AppError(ErrorCatalog.CTF_NOT_FOUND);
     }
 
-    let updateResult;
-    if (mode === 'hackathon') {
-      updateResult = await TeamChallenge.updateOne(
-        { _id: session._id, status: 'active', hintUsed: false },
-        { $set: { hintUsed: true } }
-      );
-    } else {
-      updateResult = await ChallengeSession.updateOne(
-        { _id: session._id, status: 'active', hintUsed: false },
-        { $set: { hintUsed: true } }
-      );
-    }
-
-    if (updateResult.modifiedCount === 0) {
+    if (session.hintOpened || session.hintUsed || session.penaltyApplied) {
       return res.status(200).json({
         success: true,
         message: 'Hint already unlocked.',
@@ -489,16 +476,35 @@ export const unlockChallengeHint = async (req, res, next) => {
       });
     }
 
+    if (mode === 'hackathon') {
+      await TeamChallenge.updateOne(
+        { _id: session._id, status: 'active' },
+        { $set: { hintUsed: true, hintOpened: true, penaltyApplied: true } }
+      );
+    } else {
+      await ChallengeSession.updateOne(
+        { _id: session._id, status: 'active' },
+        { $set: { hintUsed: true, hintOpened: true, penaltyApplied: true } }
+      );
+    }
+
     session.hintUsed = true;
+    session.hintOpened = true;
+    session.penaltyApplied = true;
 
     // Apply 20% penalty deduction on points earned so far in this session
-    const pointsEarned = session.solvedQuestions.reduce((sum, sq) => sum + (sq.pointsAwarded || 0), 0);
+    const questionsPoints = session.solvedQuestions.reduce((sum, sq) => sum + (sq.pointsAwarded || 0), 0);
+    const flagsPoints = session.solvedFlags.reduce((sum, sf) => sum + (sf.pointsAwarded || 0), 0);
+    const pointsEarned = questionsPoints + flagsPoints;
     const penalty = Math.round(pointsEarned * 0.2);
 
     if (penalty > 0) {
-      // Reduce the points awarded for previously solved questions in the session
+      // Reduce the points awarded for previously solved questions and flags in the session
       session.solvedQuestions.forEach(sq => {
         sq.pointsAwarded = Math.round(sq.pointsAwarded * 0.8);
+      });
+      session.solvedFlags.forEach(sf => {
+        sf.pointsAwarded = Math.round(sf.pointsAwarded * 0.8);
       });
 
       if (mode === 'hackathon') {
@@ -510,21 +516,33 @@ export const unlockChallengeHint = async (req, res, next) => {
         // Deduct from all team members
         await User.updateMany(
           { _id: { $in: team.members } },
-          { $inc: { points: -penalty } }
+          { $inc: { 
+            points: -penalty,
+            'statistics.pointsEarned': -penalty
+          } }
         );
 
         // Emit team score update
+        emitToTeam(team._id.toString(), 'team:score', { 
+          teamId: team._id.toString(),
+          points: team.points - penalty,
+          stars: team.stars
+        });
         emitToTeam(team._id.toString(), 'team:score_update', { points: -penalty });
+      } else {
+        // Practice mode
+        await User.findByIdAndUpdate(userId, {
+          $inc: { 
+            points: -penalty,
+            'statistics.pointsEarned': -penalty
+          }
+        });
       }
-
-      // Deduct from current user statistics
-      await User.findByIdAndUpdate(userId, {
-        $inc: { 'statistics.pointsEarned': -penalty }
-      });
 
       await LeaderboardService.recalculateUserRankings();
       if (mode === 'hackathon') {
         await LeaderboardService.recalculateTeamRankings();
+        emitToGlobal('leaderboard:refresh', {});
       }
     }
 
@@ -600,6 +618,19 @@ export const submitQuestionAnswer = async (req, res, next) => {
     }
 
     const challenge = await CTF.findById(challengeId);
+    if (!challenge) {
+      throw new AppError(ErrorCatalog.CTF_NOT_FOUND);
+    }
+    if (challenge.status === 'finished') {
+      throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'Ushbu topshiriq yakunlangan va javoblar qabul qilinmaydi.');
+    }
+    const hackathon = await Hackathon.findOne({
+      challenges: challengeId,
+      status: 'finished'
+    });
+    if (hackathon) {
+      throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'Ushbu xakaton yakunlangan va javoblar qabul qilinmaydi.');
+    }
     const question = challenge.questions.id(questionId);
     if (!question) {
       throw new AppError(ErrorCatalog.CTF_NOT_FOUND, 'Question not found');
@@ -634,9 +665,9 @@ export const submitQuestionAnswer = async (req, res, next) => {
       solvedAt: new Date()
     };
 
-    let updateResult;
+    let updatedSession;
     if (mode === 'hackathon') {
-      updateResult = await TeamChallenge.updateOne(
+      updatedSession = await TeamChallenge.findOneAndUpdate(
         { 
           _id: session._id, 
           status: 'active',
@@ -644,10 +675,11 @@ export const submitQuestionAnswer = async (req, res, next) => {
         },
         { 
           $push: { solvedQuestions: solvedObj } 
-        }
+        },
+        { new: true }
       );
     } else {
-      updateResult = await ChallengeSession.updateOne(
+      updatedSession = await ChallengeSession.findOneAndUpdate(
         { 
           _id: session._id, 
           status: 'active',
@@ -655,15 +687,16 @@ export const submitQuestionAnswer = async (req, res, next) => {
         },
         { 
           $push: { solvedQuestions: solvedObj } 
-        }
+        },
+        { new: true }
       );
     }
 
-    if (updateResult.modifiedCount === 0) {
+    if (!updatedSession) {
       throw new AppError(ErrorCatalog.CTF_ALREADY_SOLVED, 'Ushbu savol allaqachon yechilgan.');
     }
 
-    session.solvedQuestions.push(solvedObj);
+    session = updatedSession;
 
     if (mode === 'hackathon') {
       // Award points to team
@@ -781,6 +814,16 @@ export const submitChallengeFlag = async (req, res, next) => {
     if (!challenge) {
       throw new AppError(ErrorCatalog.CTF_NOT_FOUND);
     }
+    if (challenge.status === 'finished') {
+      throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'Ushbu topshiriq yakunlangan va flaglar qabul qilinmaydi.');
+    }
+    const hackathon = await Hackathon.findOne({
+      challenges: challengeId,
+      status: 'finished'
+    });
+    if (hackathon) {
+      throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'Ushbu xakaton yakunlangan va flaglar qabul qilinmaydi.');
+    }
 
     if (index < 0 || index >= challenge.flags.length) {
       throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'Flag index out of range');
@@ -834,9 +877,9 @@ export const submitChallengeFlag = async (req, res, next) => {
       solvedAt: new Date()
     };
 
-    let updateResult;
+    let updatedSession;
     if (mode === 'hackathon') {
-      updateResult = await TeamChallenge.updateOne(
+      updatedSession = await TeamChallenge.findOneAndUpdate(
         { 
           _id: session._id, 
           status: 'active',
@@ -844,10 +887,11 @@ export const submitChallengeFlag = async (req, res, next) => {
         },
         { 
           $push: { solvedFlags: solvedObj } 
-        }
+        },
+        { new: true }
       );
     } else {
-      updateResult = await ChallengeSession.updateOne(
+      updatedSession = await ChallengeSession.findOneAndUpdate(
         { 
           _id: session._id, 
           status: 'active',
@@ -855,15 +899,16 @@ export const submitChallengeFlag = async (req, res, next) => {
         },
         { 
           $push: { solvedFlags: solvedObj } 
-        }
+        },
+        { new: true }
       );
     }
 
-    if (updateResult.modifiedCount === 0) {
+    if (!updatedSession) {
       throw new AppError(ErrorCatalog.CTF_ALREADY_SOLVED, 'Ushbu flag allaqachon yechilgan.');
     }
 
-    session.solvedFlags.push(solvedObj);
+    session = updatedSession;
 
     // Award points immediately
     if (mode === 'hackathon') {
@@ -902,21 +947,23 @@ export const submitChallengeFlag = async (req, res, next) => {
     let fullyCompleted = false;
 
     if (allFlagsSolved) {
-      let completeResult;
+      let completedSession;
       if (mode === 'hackathon') {
-        completeResult = await TeamChallenge.updateOne(
+        completedSession = await TeamChallenge.findOneAndUpdate(
           { _id: session._id, status: 'active' },
-          { $set: { status: 'completed' } }
+          { $set: { status: 'completed' } },
+          { new: true }
         );
       } else {
-        completeResult = await ChallengeSession.updateOne(
+        completedSession = await ChallengeSession.findOneAndUpdate(
           { _id: session._id, status: 'active' },
-          { $set: { status: 'completed' } }
+          { $set: { status: 'completed' } },
+          { new: true }
         );
       }
 
-      if (completeResult.modifiedCount > 0) {
-        session.status = 'completed';
+      if (completedSession) {
+        session = completedSession;
         fullyCompleted = true;
 
         if (mode === 'hackathon') {
@@ -947,6 +994,11 @@ export const submitChallengeFlag = async (req, res, next) => {
             }
 
             await User.findByIdAndUpdate(memberId, updateData);
+          }
+
+          const currentHackathon = await Hackathon.findOne({ challenges: challengeId });
+          if (currentHackathon) {
+            await LeaderboardService.updateTeamFinishTime(team._id, currentHackathon._id);
           }
 
           emitToTeam(team._id.toString(), 'team:score', { 
@@ -993,8 +1045,6 @@ export const submitChallengeFlag = async (req, res, next) => {
         });
       }
     }
-
-    await session.save();
 
     await AuditLog.create({
       userId,
@@ -1184,6 +1234,171 @@ export const finishChallenge = async (req, res, next) => {
       message: 'Challenge finished successfully! Stars have been awarded.',
       data: {
         fullyCompleted: true
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const openHint = async (req, res, next) => {
+  try {
+    const { challengeId } = req.body;
+    if (!challengeId) {
+      throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'challengeId is required');
+    }
+    const userId = req.user.userId;
+
+    const mode = await getChallengeMode(challengeId);
+    let session = null;
+    let team = null;
+
+    if (mode === 'hackathon') {
+      team = await Team.findOne({ members: userId });
+      if (!team) {
+        throw new AppError(ErrorCatalog.HACKATHON_TEAM_NOT_REGISTERED, 'Xakaton topshiriqlarini bajarish uchun jamoada bo\'lishingiz shart.');
+      }
+      session = await TeamChallenge.findOne({ teamId: team._id, challengeId, status: 'active' });
+    } else {
+      session = await ChallengeSession.findOne({ userId, challengeId, status: 'active' });
+    }
+
+    if (!session) {
+      throw new AppError(ErrorCatalog.CTF_SESSION_NOT_FOUND);
+    }
+
+    if (new Date() > session.expiresAt) {
+      session.status = 'expired';
+      await session.save();
+      throw new AppError(ErrorCatalog.CTF_SESSION_EXPIRED);
+    }
+
+    const challenge = await CTF.findById(challengeId);
+    if (!challenge) {
+      throw new AppError(ErrorCatalog.CTF_NOT_FOUND);
+    }
+
+    let penalty = 0;
+    let newScore = 0;
+
+    if (session.hintOpened || session.hintUsed || session.penaltyApplied) {
+      // Hint already opened, no penalty
+      if (mode === 'hackathon') {
+        newScore = team.points;
+      } else {
+        const user = await User.findById(userId);
+        newScore = user.points;
+      }
+    } else {
+      // Mark as opened
+      if (mode === 'hackathon') {
+        await TeamChallenge.updateOne(
+          { _id: session._id, status: 'active' },
+          { $set: { hintUsed: true, hintOpened: true, penaltyApplied: true } }
+        );
+      } else {
+        await ChallengeSession.updateOne(
+          { _id: session._id, status: 'active' },
+          { $set: { hintUsed: true, hintOpened: true, penaltyApplied: true } }
+        );
+      }
+
+      session.hintUsed = true;
+      session.hintOpened = true;
+      session.penaltyApplied = true;
+
+      // Apply 20% penalty deduction on points earned so far in this session
+      const questionsPoints = session.solvedQuestions.reduce((sum, sq) => sum + (sq.pointsAwarded || 0), 0);
+      const flagsPoints = session.solvedFlags.reduce((sum, sf) => sum + (sf.pointsAwarded || 0), 0);
+      const pointsEarned = questionsPoints + flagsPoints;
+      penalty = Math.round(pointsEarned * 0.2);
+
+      // Reduce the points awarded for previously solved questions & flags in the session
+      session.solvedQuestions.forEach(sq => {
+        sq.pointsAwarded = Math.round(sq.pointsAwarded * 0.8);
+      });
+      session.solvedFlags.forEach(sf => {
+        sf.pointsAwarded = Math.round(sf.pointsAwarded * 0.8);
+      });
+
+      if (mode === 'hackathon') {
+        // Deduct from Team
+        const updatedTeam = await Team.findByIdAndUpdate(team._id, {
+          $inc: { points: -penalty }
+        }, { new: true });
+        newScore = updatedTeam.points;
+
+        // Deduct from all team members
+        await User.updateMany(
+          { _id: { $in: team.members } },
+          { $inc: { 
+            points: -penalty,
+            'statistics.pointsEarned': -penalty
+          } }
+        );
+
+        // Emit team score update
+        emitToTeam(team._id.toString(), 'team:score', { 
+          teamId: team._id.toString(),
+          points: updatedTeam.points,
+          stars: updatedTeam.stars
+        });
+        emitToTeam(team._id.toString(), 'team:score_update', { points: -penalty });
+      } else {
+        // Practice mode
+        const updatedUser = await User.findByIdAndUpdate(userId, {
+          $inc: {
+            points: -penalty,
+            'statistics.pointsEarned': -penalty
+          }
+        }, { new: true });
+        newScore = updatedUser.points;
+      }
+
+      await session.save();
+
+      await LeaderboardService.recalculateUserRankings();
+      if (mode === 'hackathon') {
+        await LeaderboardService.recalculateTeamRankings();
+        emitToGlobal('leaderboard:refresh', {});
+      }
+
+      // Socket updates
+      emitToGlobal('hint:opened', { challengeId, userId, teamId: team ? team._id : null });
+      emitToGlobal('score:update', { userId, teamId: team ? team._id : null, newScore });
+    }
+
+    // Get updated leaderboard
+    let updatedLeaderboard = [];
+    if (mode === 'hackathon') {
+      const hackathon = await Hackathon.findOne({ challenges: challengeId });
+      if (hackathon) {
+        const leaderboardData = await LeaderboardService.getHackathonLeaderboard(hackathon._id, team ? team._id : null);
+        updatedLeaderboard = leaderboardData ? leaderboardData.leaderboard : [];
+      }
+    } else {
+      const userLeaderboardData = await LeaderboardService.getUserLeaderboard(userId);
+      updatedLeaderboard = userLeaderboardData ? userLeaderboardData.leaderboard : [];
+    }
+
+    await AuditLog.create({
+      userId,
+      teamId: team ? team._id : null,
+      action: 'UNLOCK_CHALLENGE_HINT',
+      status: 'success',
+      details: { challengeId, penaltyApplied: penalty },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent']
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Hint unlocked successfully.',
+      data: {
+        newScore,
+        penalty,
+        updatedLeaderboard,
+        hint: challenge.hint
       }
     });
   } catch (error) {

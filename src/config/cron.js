@@ -3,7 +3,8 @@ import logger from '../utils/logger.js';
 import { LeaderboardService } from '../services/leaderboardService.js';
 import Hackathon from '../models/Hackathon.js';
 import ChallengeSession from '../models/ChallengeSession.js';
-import { emitToTeam } from './socket.js';
+import TeamChallenge from '../models/TeamChallenge.js';
+import { emitToTeam, emitToGlobal } from './socket.js';
 import { LifecycleService } from '../services/lifecycleService.js';
 
 export const initCronJobs = () => {
@@ -29,19 +30,39 @@ export const initCronJobs = () => {
   cron.schedule('* * * * *', async () => {
     try {
       const now = new Date();
-      const expiredSessions = await ChallengeSession.find({
+      
+      const expiredPractice = await ChallengeSession.find({
         status: 'active',
         expiresAt: { $lte: now }
       });
 
-      if (expiredSessions.length > 0) {
-        for (const session of expiredSessions) {
+      if (expiredPractice.length > 0) {
+        for (const session of expiredPractice) {
           session.status = 'expired';
           await session.save();
           
-          logger.info(`Cron: Challenge Session [${session._id}] for team [${session.teamId}] has expired.`);
+          logger.info(`Cron: Practice Challenge Session [${session._id}] for user [${session.userId}] has expired.`);
           
-          // Emit socket notification to the team
+          emitToGlobal('timer:expired', {
+            challengeId: session.challengeId,
+            userId: session.userId,
+            message: 'Your challenge time limit has expired!'
+          });
+        }
+      }
+
+      const expiredTeam = await TeamChallenge.find({
+        status: 'active',
+        expiresAt: { $lte: now }
+      });
+
+      if (expiredTeam.length > 0) {
+        for (const session of expiredTeam) {
+          session.status = 'expired';
+          await session.save();
+          
+          logger.info(`Cron: Team Challenge Session [${session._id}] for team [${session.teamId}] has expired.`);
+          
           emitToTeam(session.teamId.toString(), 'timer:expired', {
             challengeId: session.challengeId,
             message: 'Your challenge time limit has expired!'

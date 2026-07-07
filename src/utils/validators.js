@@ -30,7 +30,7 @@ export const teamInviteSchema = Joi.object({
 
 const questionSchema = Joi.object({
   title: Joi.string().required(),
-  description: Joi.string().required(),
+  description: Joi.string().allow('').optional().default(''),
   points: Joi.number().integer().min(10).default(10).optional(),
   answer: Joi.string().required(),
   hint: Joi.string().allow('').optional()
@@ -38,8 +38,8 @@ const questionSchema = Joi.object({
 
 export const ctfCreateSchema = Joi.object({
   title: Joi.string().min(3).max(100).required(),
-  shortDescription: Joi.string().max(250).required(),
-  longDescription: Joi.string().required(),
+  shortDescription: Joi.string().max(250).allow('').optional().default(''),
+  longDescription: Joi.string().allow('').optional().default(''),
   difficulty: Joi.string().valid('easy', 'medium', 'hard').required(),
   stars: Joi.number().integer().min(1).required(),
   points: Joi.number().integer().min(0).default(100).optional(),

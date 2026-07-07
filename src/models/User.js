@@ -55,6 +55,7 @@ const userSchema = new mongoose.Schema({
   information: { type: String, default: '' },
   stars: { type: Number, default: 0, index: true },
   points: { type: Number, default: 0, index: true },
+  totalScore: { type: Number, default: 0, index: true },
   ranking: { type: Number, default: 999999 },
   roles: {
     type: [String],
@@ -78,6 +79,28 @@ const userSchema = new mongoose.Schema({
 
 // Compound index for high performance scoreboard ordering
 userSchema.index({ points: -1, stars: -1 });
+
+const syncTotalScoreHook = function (next) {
+  const update = this.getUpdate();
+  if (update) {
+    if (update.$inc && update.$inc.points !== undefined) {
+      update.$inc.totalScore = update.$inc.points;
+    }
+    if (update.$set && update.$set.points !== undefined) {
+      update.$set.totalScore = update.$set.points;
+    }
+  }
+  next();
+};
+
+userSchema.pre('save', function (next) {
+  if (this.isModified('points')) {
+    this.totalScore = this.points;
+  }
+  next();
+});
+
+userSchema.pre(['update', 'updateOne', 'updateMany', 'findOneAndUpdate'], syncTotalScoreHook);
 
 // Password hashing before saving
 userSchema.pre('save', async function (next) {

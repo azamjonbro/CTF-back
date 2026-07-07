@@ -5,6 +5,7 @@ import Hackathon from '../models/Hackathon.js';
 import News from '../models/News.js';
 import AuditLog from '../models/AuditLog.js';
 import ChallengeSession from '../models/ChallengeSession.js';
+import TeamChallenge from '../models/TeamChallenge.js';
 import { AppError, ErrorCatalog } from '../utils/errors.js';
 import bcrypt from 'bcryptjs';
 import { LeaderboardService } from '../services/leaderboardService.js';
@@ -422,6 +423,121 @@ export const deleteHackathon = async (req, res, next) => {
     res.status(200).json({
       success: true,
       message: 'Hackathon and associated resources deleted successfully.'
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const manuallyFinishChallenge = async (req, res, next) => {
+  try {
+    const { challengeId } = req.body;
+    if (!challengeId) {
+      throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'challengeId is required');
+    }
+
+    const challenge = await CTF.findById(challengeId);
+    if (!challenge) {
+      throw new AppError(ErrorCatalog.CTF_NOT_FOUND);
+    }
+
+    if (challenge.status !== 'active') {
+      throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'Tugatish uchun challenge statusi faol (active) bo\'lishi shart.');
+    }
+
+    challenge.status = 'finished';
+    challenge.endTime = new Date();
+    await challenge.save();
+
+    await ChallengeSession.updateMany(
+      { challengeId, status: 'active' },
+      { $set: { status: 'expired', expiresAt: new Date() } }
+    );
+    await TeamChallenge.updateMany(
+      { challengeId, status: 'active' },
+      { $set: { status: 'expired', expiresAt: new Date() } }
+    );
+
+    await LeaderboardService.recalculateUserRankings();
+    await LeaderboardService.recalculateTeamRankings();
+
+    const { emitToGlobal } = await import('../config/socket.js');
+    emitToGlobal('challenge:finished', { challengeId });
+    emitToGlobal('leaderboard:update', { type: 'challenge', challengeId });
+
+    await AuditLog.create({
+      userId: req.user.userId,
+      action: 'FINISH_CHALLENGE',
+      status: 'success',
+      details: { challengeId, challengeTitle: challenge.title },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent']
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Challenge finished successfully.'
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const manuallyFinishHackathon = async (req, res, next) => {
+  try {
+    const { hackathonId } = req.body;
+    if (!hackathonId) {
+      throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'hackathonId is required');
+    }
+
+    const hackathon = await Hackathon.findById(hackathonId);
+    if (!hackathon) {
+      throw new AppError(ErrorCatalog.HACKATHON_NOT_FOUND);
+    }
+
+    if (hackathon.status !== 'active') {
+      throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'Tugatish uchun xakaton statusi faol (active) bo\'lishi shart.');
+    }
+
+    hackathon.status = 'finished';
+    hackathon.hackathonEnd = new Date();
+    await hackathon.save();
+
+    const challengeIds = hackathon.challenges || [];
+    if (challengeIds.length > 0) {
+      await ChallengeSession.updateMany(
+        { challengeId: { $in: challengeIds }, status: 'active' },
+        { $set: { status: 'expired', expiresAt: new Date() } }
+      );
+      await TeamChallenge.updateMany(
+        { challengeId: { $in: challengeIds }, status: 'active' },
+        { $set: { status: 'expired', expiresAt: new Date() } }
+      );
+    }
+
+    await LeaderboardService.recalculateUserRankings();
+    await LeaderboardService.recalculateTeamRankings();
+
+    const { emitToGlobal } = await import('../config/socket.js');
+    emitToGlobal('hackathon:finished', { hackathonId });
+    emitToGlobal('leaderboard:update', { type: 'hackathon', hackathonId });
+
+    for (const cId of challengeIds) {
+      emitToGlobal('timer:expired', { challengeId: cId });
+    }
+
+    await AuditLog.create({
+      userId: req.user.userId,
+      action: 'FINISH_HACKATHON',
+      status: 'success',
+      details: { hackathonId, hackathonName: hackathon.name },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent']
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Hackathon finished successfully.'
     });
   } catch (error) {
     next(error);

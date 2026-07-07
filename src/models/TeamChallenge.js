@@ -63,6 +63,14 @@ const teamChallengeSchema = new mongoose.Schema({
   hintUsed: {
     type: Boolean,
     default: false
+  },
+  hintOpened: {
+    type: Boolean,
+    default: false
+  },
+  penaltyApplied: {
+    type: Boolean,
+    default: false
   }
 }, {
   timestamps: true

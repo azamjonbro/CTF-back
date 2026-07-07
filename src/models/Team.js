@@ -42,7 +42,10 @@ const teamSchema = new mongoose.Schema({
   hackathonsJoined: [{
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Hackathon'
-  }]
+  }],
+  finishTime: {
+    type: Date
+  }
 }, {
   timestamps: true
 });

@@ -142,9 +142,9 @@ describe('CTF Points, Penalties, and Task Count Integration Tests', () => {
 
     // Check user stats after completion:
     // - totalSolved should be exactly 1
-    // - points should include Q1 (8) + Q2 (10) + Completed Challenge (100 * 0.8 = 80) = 98 points
+    // - points should include Q1 (8) + Q2 (10) - challenge hint penalty (4) + Completed Challenge (100 * 0.8 = 80) = 94 points
     const userFinal = await User.findById(testUser._id);
     assert.strictEqual(userFinal.statistics.totalSolved, 1);
-    assert.strictEqual(userFinal.points, 98);
+    assert.strictEqual(userFinal.points, 94);
   });
 });

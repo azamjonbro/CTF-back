@@ -8,6 +8,19 @@ import { emitToGlobal } from '../config/socket.js';
 
 export class LeaderboardService {
 
+  static formatDuration(ms) {
+    if (!ms || ms < 0) return '00:00:00';
+    const totalSeconds = Math.floor(ms / 1000);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    return [
+      hours.toString().padStart(2, '0'),
+      minutes.toString().padStart(2, '0'),
+      seconds.toString().padStart(2, '0')
+    ].join(':');
+  }
+
   // Update rankings and cache previous rank to display position changes
   static async recalculateUserRankings() {
     const users = await User.find({}).sort({ points: -1, stars: -1, createdAt: 1 }).select('_id ranking');
@@ -35,7 +48,19 @@ export class LeaderboardService {
   }
 
   static async recalculateTeamRankings() {
-    const teams = await Team.find({}).sort({ points: -1, stars: -1, createdAt: 1 }).select('_id ranking');
+    const teams = await Team.aggregate([
+      {
+        $addFields: {
+          sortFinishTime: { $ifNull: ['$finishTime', new Date('9999-12-31T23:59:59.999Z')] }
+        }
+      },
+      {
+        $sort: { points: -1, sortFinishTime: 1, stars: -1, createdAt: 1 }
+      },
+      {
+        $project: { _id: 1, ranking: 1 }
+      }
+    ]);
     
     const bulkOps = teams.map((team, index) => {
       const newRank = index + 1;
@@ -112,8 +137,14 @@ export class LeaderboardService {
 
   // Get team leaderboard with ranks, surroundings, and changes
   static async getTeamLeaderboard(teamId = null, limit = 50, skip = 0) {
+    const activeHackathon = await Hackathon.findOne({ status: 'active' });
     const teams = await Team.aggregate([
-      { $sort: { points: -1, stars: -1 } },
+      {
+        $addFields: {
+          sortFinishTime: { $ifNull: ['$finishTime', new Date('9999-12-31T23:59:59.999Z')] }
+        }
+      },
+      { $sort: { points: -1, sortFinishTime: 1, stars: -1 } },
       {
         $project: {
           name: 1,
@@ -121,6 +152,7 @@ export class LeaderboardService {
           stars: 1,
           ranking: 1,
           previousRanking: 1,
+          finishTime: 1,
           positionChange: {
             $cond: {
               if: { $or: [{ $eq: ['$previousRanking', 999999] }, { $not: ['$previousRanking'] }] },
@@ -134,6 +166,18 @@ export class LeaderboardService {
       { $limit: limit }
     ]);
 
+    const formattedTeams = teams.map((t) => {
+      let formattedFinishTime = '—';
+      if (t.finishTime && activeHackathon) {
+        const elapsedMs = new Date(t.finishTime).getTime() - activeHackathon.hackathonStart.getTime();
+        formattedFinishTime = LeaderboardService.formatDuration(elapsedMs);
+      }
+      return {
+        ...t,
+        finishTime: formattedFinishTime
+      };
+    });
+
     let surrounding = { currentTeamRank: null, above: [], below: [] };
 
     if (teamId) {
@@ -141,18 +185,42 @@ export class LeaderboardService {
       if (currentTeam) {
         surrounding.currentTeamRank = currentTeam.ranking;
 
-        surrounding.above = await Team.find({ ranking: { $lt: currentTeam.ranking, $gte: Math.max(1, currentTeam.ranking - 3) } })
+        const rawAbove = await Team.find({ ranking: { $lt: currentTeam.ranking, $gte: Math.max(1, currentTeam.ranking - 3) } })
           .sort({ ranking: -1 })
-          .select('name points stars ranking');
+          .select('name points stars ranking finishTime');
+        
+        surrounding.above = rawAbove.map(a => {
+          let formattedFinishTime = '—';
+          if (a.finishTime && activeHackathon) {
+            const elapsedMs = new Date(a.finishTime).getTime() - activeHackathon.hackathonStart.getTime();
+            formattedFinishTime = LeaderboardService.formatDuration(elapsedMs);
+          }
+          return {
+            ...a.toObject(),
+            finishTime: formattedFinishTime
+          };
+        });
 
-        surrounding.below = await Team.find({ ranking: { $gt: currentTeam.ranking, $lte: currentTeam.ranking + 3 } })
+        const rawBelow = await Team.find({ ranking: { $gt: currentTeam.ranking, $lte: currentTeam.ranking + 3 } })
           .sort({ ranking: 1 })
-          .select('name points stars ranking');
+          .select('name points stars ranking finishTime');
+
+        surrounding.below = rawBelow.map(b => {
+          let formattedFinishTime = '—';
+          if (b.finishTime && activeHackathon) {
+            const elapsedMs = new Date(b.finishTime).getTime() - activeHackathon.hackathonStart.getTime();
+            formattedFinishTime = LeaderboardService.formatDuration(elapsedMs);
+          }
+          return {
+            ...b.toObject(),
+            finishTime: formattedFinishTime
+          };
+        });
       }
     }
 
     return {
-      leaderboard: teams,
+      leaderboard: formattedTeams,
       surrounding
     };
   }
@@ -182,13 +250,52 @@ export class LeaderboardService {
           challengeId: { $in: challengeIds }
         } 
       },
-      { $unwind: '$solvedQuestions' },
+      {
+        $project: {
+          teamId: 1,
+          sessionPoints: {
+            $add: [
+              { $sum: { $ifNull: ['$solvedQuestions.pointsAwarded', [0]] } },
+              { $sum: { $ifNull: ['$solvedFlags.pointsAwarded', [0]] } }
+            ]
+          },
+          sessionSolvedCount: { $size: { $ifNull: ['$solvedQuestions', []] } },
+          sessionLastSolveTime: {
+            $cond: {
+              if: { $gt: [{ $size: { $ifNull: ['$solvedQuestions', []] } }, 0] },
+              then: { $max: '$solvedQuestions.solvedAt' },
+              else: null
+            }
+          },
+          sessionLastFlagTime: {
+            $cond: {
+              if: { $gt: [{ $size: { $ifNull: ['$solvedFlags', []] } }, 0] },
+              then: { $max: '$solvedFlags.solvedAt' },
+              else: null
+            }
+          }
+        }
+      },
+      {
+        $project: {
+          teamId: 1,
+          sessionPoints: 1,
+          sessionSolvedCount: 1,
+          sessionLastSolveTime: {
+            $cond: {
+              if: { $and: [ { $ifNull: ['$sessionLastSolveTime', false] }, { $ifNull: ['$sessionLastFlagTime', false] } ] },
+              then: { $max: ['$sessionLastSolveTime', '$sessionLastFlagTime'] },
+              else: { $ifNull: ['$sessionLastSolveTime', '$sessionLastFlagTime'] }
+            }
+          }
+        }
+      },
       {
         $group: {
           _id: '$teamId',
-          totalPoints: { $sum: '$solvedQuestions.pointsAwarded' },
-          totalSolved: { $sum: 1 },
-          lastSolveTime: { $max: '$solvedQuestions.solvedAt' }
+          totalPoints: { $sum: '$sessionPoints' },
+          totalSolved: { $sum: '$sessionSolvedCount' },
+          lastSolveTime: { $max: '$sessionLastSolveTime' }
         }
       },
       // Join team details
@@ -209,6 +316,7 @@ export class LeaderboardService {
           solved: '$totalSolved',
           lastSolveTime: 1,
           stars: '$teamDetails.stars',
+          finishTime: '$teamDetails.finishTime',
           completionPercentage: {
             $multiply: [
               { $divide: ['$totalSolved', totalQuestionsCount] },
@@ -217,15 +325,28 @@ export class LeaderboardService {
           }
         }
       },
-      // Sort by points desc, then lastSolveTime asc
-      { $sort: { points: -1, lastSolveTime: 1 } }
+      // Sort by points desc, then finishTime asc
+      {
+        $addFields: {
+          sortFinishTime: { $ifNull: ['$finishTime', new Date('9999-12-31T23:59:59.999Z')] }
+        }
+      },
+      { $sort: { points: -1, sortFinishTime: 1 } }
     ]);
 
     // Format scoreboard and inject rank
-    const rankedScoreboard = leaderboard.map((item, index) => ({
-      rank: index + 1,
-      ...item
-    }));
+    const rankedScoreboard = leaderboard.map((item, index) => {
+      let formattedFinishTime = '—';
+      if (item.finishTime) {
+        const elapsedMs = new Date(item.finishTime).getTime() - hackathon.hackathonStart.getTime();
+        formattedFinishTime = LeaderboardService.formatDuration(elapsedMs);
+      }
+      return {
+        rank: index + 1,
+        ...item,
+        finishTime: formattedFinishTime
+      };
+    });
 
     let surrounding = { currentTeamRank: null, above: [], below: [] };
 
@@ -243,5 +364,37 @@ export class LeaderboardService {
       leaderboard: rankedScoreboard,
       surrounding
     };
+  }
+
+  static async updateTeamFinishTime(teamId, hackathonId) {
+    const hackathon = await Hackathon.findById(hackathonId);
+    if (!hackathon) return;
+
+    const challengeIds = hackathon.challenges;
+    if (!challengeIds || challengeIds.length === 0) return;
+
+    // Find all TeamChallenge documents for this team and these challenges
+    const sessions = await TeamChallenge.find({
+      teamId,
+      challengeId: { $in: challengeIds }
+    });
+
+    // Check if every challenge in the hackathon has a completed session
+    const allCompleted = challengeIds.every(cId => {
+      const session = sessions.find(s => s.challengeId.toString() === cId.toString());
+      return session && session.status === 'completed';
+    });
+
+    if (allCompleted) {
+      let maxTime = hackathon.hackathonStart;
+      sessions.forEach(s => {
+        if (s.updatedAt && s.updatedAt > maxTime) {
+          maxTime = s.updatedAt;
+        }
+      });
+      await Team.findByIdAndUpdate(teamId, { finishTime: maxTime });
+    } else {
+      await Team.findByIdAndUpdate(teamId, { $unset: { finishTime: 1 } });
+    }
   }
 }

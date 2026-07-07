@@ -49,3 +49,29 @@ export const getTeamLeaderboard = async (req, res, next) => {
     next(error);
   }
 };
+
+export const getLeaderboardAndFinishTime = async (req, res, next) => {
+  try {
+    const limit = parseInt(req.query.limit) || 50;
+    const skip = parseInt(req.query.skip) || 0;
+    const userId = req.user ? req.user.userId : null;
+
+    let teamId = null;
+    if (userId) {
+      const team = await Team.findOne({ members: userId });
+      if (team) {
+        teamId = team._id;
+      }
+    }
+
+    await LeaderboardService.recalculateTeamRankings();
+    const data = await LeaderboardService.getTeamLeaderboard(teamId, limit, skip);
+
+    res.status(200).json({
+      success: true,
+      data
+    });
+  } catch (error) {
+    next(error);
+  }
+};

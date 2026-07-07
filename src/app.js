@@ -25,6 +25,12 @@ import hackathonRoutes from './routes/hackathonRoutes.js';
 import leaderboardRoutes from './routes/leaderboardRoutes.js';
 import adminRoutes from './routes/adminRoutes.js';
 
+// New API Updates (Requirement 8)
+import { openHint } from './controllers/ctfController.js';
+import { manuallyFinishChallenge, manuallyFinishHackathon } from './controllers/adminController.js';
+import { getLeaderboardAndFinishTime } from './controllers/leaderboardController.js';
+import { authenticate, requireRole } from './middlewares/auth.js';
+
 // Init environment variables
 dotenv.config();
 
@@ -69,6 +75,18 @@ app.use('/api/v1/ctfs', ctfRoutes);
 app.use('/api/v1/hackathons', hackathonRoutes);
 app.use('/api/v1/leaderboards', leaderboardRoutes);
 app.use('/api/v1/admin', adminRoutes);
+
+// Custom API Updates Mount (Requirement 8)
+app.post('/api/v1/hint/open', authenticate, openHint);
+app.post('/api/v1/challenge/finish', authenticate, requireRole(['admin']), manuallyFinishChallenge);
+app.post('/api/v1/hackathon/finish', authenticate, requireRole(['admin']), manuallyFinishHackathon);
+app.get('/api/v1/leaderboard', (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    return authenticate(req, res, next);
+  }
+  next();
+}, getLeaderboardAndFinishTime);
 
 // Fallback path handler
 app.use('*', (req, res) => {

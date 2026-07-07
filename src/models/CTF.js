@@ -2,7 +2,7 @@ import mongoose from 'mongoose';
 
 const questionSchema = new mongoose.Schema({
   title: { type: String, required: true, trim: true },
-  description: { type: String, required: true },
+  description: { type: String, default: '' },
   answer: { type: String, required: true }, // bcrypt hashed
   points: { type: Number, required: true, default: 10, min: 10 },
   hint: { type: String, default: '' }
@@ -21,8 +21,8 @@ const ctfSchema = new mongoose.Schema({
     trim: true,
     index: true
   },
-  shortDescription: { type: String, required: true, maxlength: 250 },
-  longDescription: { type: String, required: true },
+  shortDescription: { type: String, default: '', maxlength: 250 },
+  longDescription: { type: String, default: '' },
   difficulty: {
     type: String,
     enum: ['easy', 'medium', 'hard'],
@@ -50,9 +50,12 @@ const ctfSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['draft', 'active', 'disabled'],
+    enum: ['draft', 'active', 'disabled', 'finished'],
     default: 'draft',
     index: true
+  },
+  endTime: {
+    type: Date
   },
   timerMinutes: {
     type: Number,
