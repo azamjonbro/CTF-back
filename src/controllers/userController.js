@@ -344,13 +344,19 @@ export const getDashboardStats = async (req, res, next) => {
       }
     });
 
+    const dbStats = await LeaderboardService.calculateUserStatsFromDb(userId);
+
     res.status(200).json({
       success: true,
       data: {
         username: user.username,
-        points: user.points || 0,
+        points: dbStats.totalScore,
+        totalScore: dbStats.totalScore,
+        solves: dbStats.totalSolved,
+        solvedFlagsCount: dbStats.solvedFlagsCount,
+        solvedQuestionsCount: dbStats.solvedQuestionsCount,
+        participationCount: dbStats.participationCount,
         stars: user.stars || 0,
-        solves: user.statistics?.totalSolved || 0,
         ranking: user.ranking || 999999,
         teamName,
         skillsProfile: categorySolvedCounts
