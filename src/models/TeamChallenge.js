@@ -71,6 +71,12 @@ const teamChallengeSchema = new mongoose.Schema({
   penaltyApplied: {
     type: Boolean,
     default: false
+  },
+  flagHintsUnlocked: [{
+    type: Number
+  }],
+  finishedAt: {
+    type: Date
   }
 }, {
   timestamps: true

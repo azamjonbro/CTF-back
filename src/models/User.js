@@ -57,6 +57,7 @@ const userSchema = new mongoose.Schema({
   points: { type: Number, default: 0, index: true },
   totalScore: { type: Number, default: 0, index: true },
   ranking: { type: Number, default: 999999 },
+  finishTime: { type: Date },
   roles: {
     type: [String],
     enum: ['admin', 'staff', 'support', 'team_leader', 'team_member'],

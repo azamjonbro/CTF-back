@@ -180,4 +180,59 @@ describe('New Features & Manual Finish Integration Tests', () => {
     // Clean up
     await CTF.deleteOne({ _id: ctfHint._id });
   });
+
+  it('should test admin reset progress info and reset functionality', async () => {
+    // Create a new challenge to reset
+    const ctfReset = new CTF({
+      title: 'Reset Target Challenge ' + Date.now(),
+      shortDescription: 'desc',
+      longDescription: 'desc',
+      difficulty: 'easy',
+      stars: 1,
+      category: 'Crypto',
+      author: testAdmin._id,
+      status: 'active',
+      timerMinutes: 30,
+      flags: [{ flag: 'FLAG{reset}', points: 100 }],
+      questions: [
+        { title: 'Q1', description: 'd', answer: 'a', hint: 'h' },
+        { title: 'Q2', description: 'd', answer: 'a', hint: 'h' },
+        { title: 'Q3', description: 'd', answer: 'a', hint: 'h' },
+        { title: 'Q4', description: 'd', answer: 'a', hint: 'h' },
+        { title: 'Q5', description: 'd', answer: 'a', hint: 'h' }
+      ]
+    });
+    await ctfReset.save();
+
+    // Start user session
+    await request(server)
+      .post(`/api/v1/ctfs/${ctfReset._id}/session`)
+      .set('Authorization', `Bearer ${userToken}`)
+      .expect(200);
+
+    // Verify reset info returns active session count = 1
+    const infoRes = await request(server)
+      .get(`/api/v1/admin/reset/info?type=challenge&targetId=${ctfReset._id}`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .expect(200);
+
+    assert.strictEqual(infoRes.body.success, true);
+    assert.strictEqual(infoRes.body.data.details.activeSessions, 1);
+
+    // Call performReset
+    const resetRes = await request(server)
+      .post('/api/v1/admin/reset')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ type: 'challenge', targetId: ctfReset._id })
+      .expect(200);
+
+    assert.strictEqual(resetRes.body.success, true);
+
+    // Verify session was deleted
+    const sessionCount = await ChallengeSession.countDocuments({ challengeId: ctfReset._id });
+    assert.strictEqual(sessionCount, 0);
+
+    // Clean up
+    await CTF.deleteOne({ _id: ctfReset._id });
+  });
 });

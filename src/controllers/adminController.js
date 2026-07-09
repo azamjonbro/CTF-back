@@ -6,6 +6,7 @@ import News from '../models/News.js';
 import AuditLog from '../models/AuditLog.js';
 import ChallengeSession from '../models/ChallengeSession.js';
 import TeamChallenge from '../models/TeamChallenge.js';
+import ChallengeSolve from '../models/ChallengeSolve.js';
 import { AppError, ErrorCatalog } from '../utils/errors.js';
 import bcrypt from 'bcryptjs';
 import { LeaderboardService } from '../services/leaderboardService.js';
@@ -538,6 +539,262 @@ export const manuallyFinishHackathon = async (req, res, next) => {
     res.status(200).json({
       success: true,
       message: 'Hackathon finished successfully.'
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Score recalculation helpers
+const recalculateUserScores = async (userId) => {
+  const personalSolves = await ChallengeSolve.find({ userId, teamId: null });
+  const team = await Team.findOne({ members: userId });
+  let teamSolves = [];
+  if (team) {
+    teamSolves = await ChallengeSolve.find({ teamId: team._id });
+  }
+
+  const personalPoints = personalSolves.reduce((sum, s) => sum + (s.pointsAwarded || 0), 0);
+  const teamPoints = teamSolves.reduce((sum, s) => sum + (s.pointsAwarded || 0), 0);
+  const totalPoints = personalPoints + teamPoints;
+
+  const personalChallengeIds = personalSolves.map(s => s.challengeId);
+  const teamChallengeIds = teamSolves.map(s => s.challengeId);
+
+  const personalCtfs = await CTF.find({ _id: { $in: personalChallengeIds } });
+  const teamCtfs = await CTF.find({ _id: { $in: teamChallengeIds } });
+
+  const personalStars = personalCtfs.reduce((sum, c) => sum + c.stars, 0);
+  const teamStars = teamCtfs.reduce((sum, c) => sum + c.stars, 0);
+  const totalStars = personalStars + teamStars;
+
+  await User.findByIdAndUpdate(userId, {
+    points: totalPoints,
+    totalScore: totalPoints,
+    stars: totalStars,
+    'statistics.pointsEarned': totalPoints,
+    'statistics.starsEarned': totalStars,
+    'statistics.totalSolved': personalSolves.length + teamSolves.length
+  });
+};
+
+const recalculateTeamScores = async (teamId) => {
+  const teamSolves = await ChallengeSolve.find({ teamId });
+  const teamPoints = teamSolves.reduce((sum, s) => sum + (s.pointsAwarded || 0), 0);
+
+  const teamChallengeIds = teamSolves.map(s => s.challengeId);
+  const teamCtfs = await CTF.find({ _id: { $in: teamChallengeIds } });
+  const teamStars = teamCtfs.reduce((sum, c) => sum + c.stars, 0);
+
+  await Team.findByIdAndUpdate(teamId, {
+    points: teamPoints,
+    stars: teamStars
+  });
+};
+
+export const getResetInfo = async (req, res, next) => {
+  try {
+    const { type, targetId } = req.query;
+
+    if (!['challenge', 'ctf', 'hackathon'].includes(type)) {
+      throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'Invalid reset type');
+    }
+
+    let affectedUsersCount = 0;
+    let affectedTeamsCount = 0;
+    let details = {};
+
+    if (type === 'challenge') {
+      if (!targetId) {
+        throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'targetId is required for challenge type');
+      }
+      const challenge = await CTF.findById(targetId);
+      if (!challenge) {
+        throw new AppError(ErrorCatalog.CTF_NOT_FOUND);
+      }
+      affectedUsersCount = await ChallengeSession.countDocuments({ challengeId: targetId });
+      affectedTeamsCount = await TeamChallenge.countDocuments({ challengeId: targetId });
+      const solveCount = await ChallengeSolve.countDocuments({ challengeId: targetId });
+      details = {
+        title: challenge.title,
+        activeSessions: affectedUsersCount,
+        activeTeamSessions: affectedTeamsCount,
+        totalSolves: solveCount
+      };
+    } else if (type === 'ctf') {
+      affectedUsersCount = await ChallengeSession.countDocuments({});
+      const solveCount = await ChallengeSolve.countDocuments({ teamId: null });
+      details = {
+        activeSessions: affectedUsersCount,
+        totalPracticeSolves: solveCount
+      };
+    } else if (type === 'hackathon') {
+      if (!targetId) {
+        throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'targetId is required for hackathon type');
+      }
+      const hackathon = await Hackathon.findById(targetId);
+      if (!hackathon) {
+        throw new AppError(ErrorCatalog.HACKATHON_NOT_FOUND);
+      }
+      const challengeIds = hackathon.challenges || [];
+      affectedTeamsCount = await TeamChallenge.countDocuments({ challengeId: { $in: challengeIds } });
+      const solveCount = await ChallengeSolve.countDocuments({ challengeId: { $in: challengeIds } });
+      details = {
+        name: hackathon.name,
+        activeTeamSessions: affectedTeamsCount,
+        totalSolves: solveCount
+      };
+    }
+
+    res.status(200).json({
+      success: true,
+      data: {
+        type,
+        targetId,
+        details
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const performReset = async (req, res, next) => {
+  try {
+    const { type, targetId } = req.body;
+
+    if (!['challenge', 'ctf', 'hackathon'].includes(type)) {
+      throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'Invalid reset type');
+    }
+
+    let affectedUserIds = new Set();
+    let affectedTeamIds = new Set();
+
+    if (type === 'challenge') {
+      if (!targetId) {
+        throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'targetId is required for challenge type');
+      }
+
+      // Find affected users/teams from sessions/solves
+      const sessions = await ChallengeSession.find({ challengeId: targetId }).select('userId');
+      const teamSessions = await TeamChallenge.find({ challengeId: targetId }).select('teamId');
+      const solves = await ChallengeSolve.find({ challengeId: targetId }).select('userId teamId');
+
+      sessions.forEach(s => affectedUserIds.add(s.userId.toString()));
+      teamSessions.forEach(ts => affectedTeamIds.add(ts.teamId.toString()));
+      solves.forEach(sv => {
+        if (sv.userId) affectedUserIds.add(sv.userId.toString());
+        if (sv.teamId) affectedTeamIds.add(sv.teamId.toString());
+      });
+
+      // Delete sessions, solves, completedCtfs links
+      await ChallengeSession.deleteMany({ challengeId: targetId });
+      await TeamChallenge.deleteMany({ challengeId: targetId });
+      await ChallengeSolve.deleteMany({ challengeId: targetId });
+      
+      await User.updateMany(
+        { completedCtfs: targetId },
+        { $pull: { completedCtfs: targetId } }
+      );
+
+      // Recalculate affected users and teams
+      for (const uId of affectedUserIds) {
+        await recalculateUserScores(uId);
+      }
+      for (const tId of affectedTeamIds) {
+        await recalculateTeamScores(tId);
+      }
+
+    } else if (type === 'ctf') {
+      // Practice CTF Reset: resets all non-hackathon ctf sessions and solves
+      const sessions = await ChallengeSession.find({}).select('userId');
+      const solves = await ChallengeSolve.find({ teamId: null }).select('userId');
+
+      sessions.forEach(s => affectedUserIds.add(s.userId.toString()));
+      solves.forEach(sv => affectedUserIds.add(sv.userId.toString()));
+
+      await ChallengeSession.deleteMany({});
+      await ChallengeSolve.deleteMany({ teamId: null });
+
+      // Pull all CTF challenges from completedCtfs of all users
+      const activeHackathons = await Hackathon.find({});
+      const hackathonChallengeIds = new Set();
+      activeHackathons.forEach(h => {
+        if (h.challenges) {
+          h.challenges.forEach(id => hackathonChallengeIds.add(id.toString()));
+        }
+      });
+
+      const allUsers = await User.find({});
+      for (const user of allUsers) {
+        const keptCompleted = (user.completedCtfs || []).filter(cId => hackathonChallengeIds.has(cId.toString()));
+        user.completedCtfs = keptCompleted;
+        await user.save();
+        await recalculateUserScores(user._id);
+      }
+
+    } else if (type === 'hackathon') {
+      if (!targetId) {
+        throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'targetId is required for hackathon type');
+      }
+      const hackathon = await Hackathon.findById(targetId);
+      if (!hackathon) {
+        throw new AppError(ErrorCatalog.HACKATHON_NOT_FOUND);
+      }
+
+      const challengeIds = hackathon.challenges || [];
+
+      // Find affected teams/users
+      const teamSessions = await TeamChallenge.find({ challengeId: { $in: challengeIds } }).select('teamId');
+      const solves = await ChallengeSolve.find({ challengeId: { $in: challengeIds } }).select('userId teamId');
+
+      teamSessions.forEach(ts => affectedTeamIds.add(ts.teamId.toString()));
+      solves.forEach(sv => {
+        if (sv.userId) affectedUserIds.add(sv.userId.toString());
+        if (sv.teamId) affectedTeamIds.add(sv.teamId.toString());
+      });
+
+      // Clear team finishTime
+      for (const tId of affectedTeamIds) {
+        await Team.findByIdAndUpdate(tId, { $unset: { finishTime: 1 } });
+      }
+
+      // Delete session and solve docs
+      await TeamChallenge.deleteMany({ challengeId: { $in: challengeIds } });
+      await ChallengeSolve.deleteMany({ challengeId: { $in: challengeIds } });
+
+      // Pull challenges from user completed list
+      await User.updateMany(
+        { _id: { $in: Array.from(affectedUserIds) } },
+        { $pull: { completedCtfs: { $in: challengeIds } } }
+      );
+
+      // Recalculate
+      for (const uId of affectedUserIds) {
+        await recalculateUserScores(uId);
+      }
+      for (const tId of affectedTeamIds) {
+        await recalculateTeamScores(tId);
+      }
+    }
+
+    // Finally, recalculate rankings
+    await LeaderboardService.recalculateUserRankings();
+    await LeaderboardService.recalculateTeamRankings();
+
+    // Log admin activity
+    await AuditLog.create({
+      userId: req.user.userId,
+      action: 'ADMIN_RESET_PROGRESS',
+      status: 'success',
+      details: { type, targetId },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent']
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `${type} progress successfully reset. Standings and rankings synchronized.`
     });
   } catch (error) {
     next(error);

@@ -5,6 +5,7 @@ import Hackathon from '../models/Hackathon.js';
 import ChallengeSession from '../models/ChallengeSession.js';
 import TeamChallenge from '../models/TeamChallenge.js';
 import AuditLog from '../models/AuditLog.js';
+import ChallengeSolve from '../models/ChallengeSolve.js';
 import { AppError, ErrorCatalog } from '../utils/errors.js';
 import mongoose from 'mongoose';
 
@@ -63,7 +64,7 @@ export const getChallenges = async (req, res, next) => {
       query._id = { $nin: hackathonChallengeIds };
     }
 
-    let selectFields = 'title shortDescription longDescription difficulty stars category author status questions attachments image';
+    let selectFields = 'title shortDescription longDescription difficulty stars category author status questions attachments image timerMinutes points';
     if (isStaffOrAdmin) {
       selectFields += ' flags';
     }
@@ -72,9 +73,21 @@ export const getChallenges = async (req, res, next) => {
       .select(selectFields)
       .populate('author', 'username');
 
+    let solvedIds = [];
+    if (req.user && req.user.userId) {
+      const userSolves = await ChallengeSolve.find({ userId: req.user.userId }).select('challengeId');
+      solvedIds = userSolves.map(s => s.challengeId.toString());
+    }
+
+    const challengesMapped = challenges.map(c => {
+      const cObj = c.toObject();
+      cObj.isSolved = solvedIds.includes(c._id.toString());
+      return cObj;
+    });
+
     res.status(200).json({
       success: true,
-      data: challenges
+      data: challengesMapped
     });
   } catch (error) {
     next(error);
@@ -94,9 +107,10 @@ export const getChallengeDetails = async (req, res, next) => {
 
     const mode = await getChallengeMode(challengeId);
     let session = null;
+    let team = null;
 
     if (mode === 'hackathon') {
-      const team = await Team.findOne({ members: userId });
+      team = await Team.findOne({ members: userId });
       const teamId = team ? team._id : null;
       if (teamId) {
         session = await TeamChallenge.findOne({ teamId, challengeId });
@@ -105,11 +119,22 @@ export const getChallengeDetails = async (req, res, next) => {
       session = await ChallengeSession.findOne({ userId, challengeId });
     }
 
+    // Check if challenge is already solved permanently
+    let isSolved = false;
+    if (mode === 'hackathon') {
+      if (team) {
+        isSolved = await ChallengeSolve.exists({ teamId: team._id, challengeId });
+      }
+    } else {
+      isSolved = await ChallengeSolve.exists({ userId, challengeId });
+    }
+
     if (!session) {
       return res.status(200).json({
         success: true,
         data: {
           hasActiveSession: false,
+          isSolved: !!isSolved,
           challenge: {
             _id: challenge._id,
             title: challenge.title,
@@ -123,8 +148,14 @@ export const getChallengeDetails = async (req, res, next) => {
             attachments: challenge.attachments || [],
             questionsCount: challenge.questions.length,
             flagsCount: challenge.flags.length,
-            flags: challenge.flags.map(f => ({ points: f.points !== undefined ? f.points : 100 })),
-            hasHint: !!challenge.hint
+            flags: challenge.flags.map((f, i) => ({
+              title: f.title || `Flag #${i + 1}`,
+              description: f.description || '',
+              points: Math.round(challenge.points / challenge.flags.length),
+              hasHint: !!f.hint
+            })),
+            hasHint: !!challenge.hint,
+            isSolved: !!isSolved
           }
         }
       });
@@ -151,12 +182,28 @@ export const getChallengeDetails = async (req, res, next) => {
       };
     });
 
+    // Project flags metadata for active workspace securely (omit flag hashes!)
+    const flagsProjected = challenge.flags.map((f, i) => {
+      const isHintUnlocked = session.flagHintsUnlocked && session.flagHintsUnlocked.includes(i);
+      return {
+        title: f.title || `Flag #${i + 1}`,
+        description: f.description || '',
+        points: Math.round(challenge.points / challenge.flags.length),
+        attachment: f.attachment || '',
+        hasHint: !!f.hint,
+        hintUnlocked: isHintUnlocked,
+        hint: isHintUnlocked ? (f.hint || '') : '',
+        isSolved: session.solvedFlags.some(sf => sf.flagIndex === i)
+      };
+    });
+
     res.status(200).json({
       success: true,
       data: {
         hasActiveSession: true,
         sessionId: session._id,
         challengeId: challenge._id,
+        isSolved: !!isSolved,
         title: challenge.title,
         longDescription: challenge.longDescription,
         difficulty: challenge.difficulty,
@@ -176,7 +223,7 @@ export const getChallengeDetails = async (req, res, next) => {
         hintUsed: session.hintUsed || false,
         challengeHint: session.hintUsed ? challenge.hint : null,
         questions: questionsWithoutAnswers,
-        flags: challenge.flags.map(f => ({ points: f.points !== undefined ? f.points : 100 })),
+        flags: flagsProjected,
         solvedFlags: session.solvedFlags || [],
         flagsCount: challenge.flags.length
       }
@@ -198,9 +245,26 @@ export const startChallengeSession = async (req, res, next) => {
 
     const mode = await getChallengeMode(challengeId);
     let session = null;
+    let team = null;
+
+    // Check if challenge is already solved in the permanent solves record
+    let isSolvedRecord = false;
+    if (mode === 'hackathon') {
+      team = await Team.findOne({ members: userId });
+      if (team) {
+        isSolvedRecord = await ChallengeSolve.exists({ teamId: team._id, challengeId });
+      }
+    } else {
+      isSolvedRecord = await ChallengeSolve.exists({ userId, challengeId });
+    }
+    if (isSolvedRecord) {
+      throw new AppError(ErrorCatalog.CTF_ALREADY_SOLVED, 'Ushbu topshiriq allaqachon yechilgan.');
+    }
 
     if (mode === 'hackathon') {
-      const team = await Team.findOne({ members: userId });
+      if (!team) {
+        team = await Team.findOne({ members: userId });
+      }
       if (!team) {
         throw new AppError(ErrorCatalog.HACKATHON_TEAM_NOT_REGISTERED, 'Xakaton topshiriqlarini bajarish uchun jamoada bo\'lishingiz shart.');
       }
@@ -434,6 +498,129 @@ export const unlockQuestionHint = async (req, res, next) => {
   }
 };
 
+export const unlockFlagHint = async (req, res, next) => {
+  try {
+    const { challengeId, flagIndex } = req.params;
+    const userId = req.user.userId;
+
+    const index = parseInt(flagIndex, 10);
+    if (isNaN(index)) {
+      throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'Invalid flag index');
+    }
+
+    const mode = await getChallengeMode(challengeId);
+    let session = null;
+    let team = null;
+
+    if (mode === 'hackathon') {
+      team = await Team.findOne({ members: userId });
+      if (!team) {
+        throw new AppError(ErrorCatalog.HACKATHON_TEAM_NOT_REGISTERED, 'Xakaton topshiriqlarini bajarish uchun jamoada bo\'lishingiz shart.');
+      }
+      session = await TeamChallenge.findOne({ teamId: team._id, challengeId, status: 'active' });
+    } else {
+      session = await ChallengeSession.findOne({ userId, challengeId, status: 'active' });
+    }
+
+    if (!session) {
+      throw new AppError(ErrorCatalog.CTF_SESSION_NOT_FOUND);
+    }
+
+    if (new Date() > session.expiresAt) {
+      session.status = 'expired';
+      await session.save();
+      throw new AppError(ErrorCatalog.CTF_SESSION_EXPIRED);
+    }
+
+    const challenge = await CTF.findById(challengeId);
+    if (!challenge) {
+      throw new AppError(ErrorCatalog.CTF_NOT_FOUND);
+    }
+
+    const flagObj = challenge.flags[index];
+    if (!flagObj) {
+      throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'Flag index not found');
+    }
+
+    // Check if already unlocked
+    const alreadyUnlocked = session.flagHintsUnlocked && session.flagHintsUnlocked.includes(index);
+    if (alreadyUnlocked) {
+      return res.status(200).json({
+        success: true,
+        message: 'Hint already unlocked.',
+        data: { hint: flagObj.hint || '' }
+      });
+    }
+
+    // Check if flag is already solved
+    const isSolved = session.solvedFlags.some(sf => sf.flagIndex === index);
+    if (isSolved) {
+      throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'Bu flag allaqachon yechilgan. Maslahatni ochish mumkin emas.');
+    }
+
+    // Unlock hint atomically
+    let updateResult;
+    if (mode === 'hackathon') {
+      updateResult = await TeamChallenge.updateOne(
+        {
+          _id: session._id,
+          status: 'active',
+          flagHintsUnlocked: { $ne: index }
+        },
+        {
+          $push: { flagHintsUnlocked: index }
+        }
+      );
+    } else {
+      updateResult = await ChallengeSession.updateOne(
+        {
+          _id: session._id,
+          status: 'active',
+          flagHintsUnlocked: { $ne: index }
+        },
+        {
+          $push: { flagHintsUnlocked: index }
+        }
+      );
+    }
+
+    if (updateResult.modifiedCount === 0) {
+      return res.status(200).json({
+        success: true,
+        message: 'Hint already unlocked.',
+        data: { hint: flagObj.hint || '' }
+      });
+    }
+
+    // Load updated session
+    if (mode === 'hackathon') {
+      session = await TeamChallenge.findById(session._id);
+    } else {
+      session = await ChallengeSession.findById(session._id);
+    }
+
+    await AuditLog.create({
+      userId,
+      teamId: team ? team._id : null,
+      action: 'UNLOCK_FLAG_HINT',
+      status: 'success',
+      details: { challengeId, flagIndex: index },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent']
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Hint unlocked successfully. A 20% score reduction will be applied to this flag.',
+      data: {
+        hint: flagObj.hint || ''
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 export const unlockChallengeHint = async (req, res, next) => {
   try {
     const { challengeId } = req.params;
@@ -655,9 +842,7 @@ export const submitQuestionAnswer = async (req, res, next) => {
       throw new AppError(ErrorCatalog.CTF_FLAG_INCORRECT, `Incorrect answer. Ushbu savol uchun urinishlar: ${session.questionAttempts[qaIndex].failedAttempts}/5`);
     }
 
-    const originalScore = question.points !== undefined ? question.points : 10;
-    const isQuestionHintUnlocked = session.hintsUnlocked.some(hu => hu.questionId.toString() === questionId);
-    const scoreAwarded = isQuestionHintUnlocked ? Math.round(originalScore * 0.8) : originalScore;
+    const scoreAwarded = 0;
 
     const solvedObj = {
       questionId: new mongoose.Types.ObjectId(questionId),
@@ -839,6 +1024,17 @@ export const submitChallengeFlag = async (req, res, next) => {
       throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'Ushbu flag uchun maksimal urinishlar sonidan oshib ketildi (5 ta xato urinish). Flag bloklandi.');
     }
 
+    // Check if challenge is already solved in the permanent solves record
+    let isSolvedRecord = false;
+    if (mode === 'hackathon') {
+      isSolvedRecord = await ChallengeSolve.exists({ teamId: team._id, challengeId });
+    } else {
+      isSolvedRecord = await ChallengeSolve.exists({ userId, challengeId });
+    }
+    if (isSolvedRecord) {
+      throw new AppError(ErrorCatalog.CTF_ALREADY_SOLVED, 'Ushbu topshiriq allaqachon yechilgan.');
+    }
+
     // Check if flag index is already solved
     const alreadySolved = session.solvedFlags.some(sf => sf.flagIndex === index);
     if (alreadySolved) {
@@ -847,8 +1043,14 @@ export const submitChallengeFlag = async (req, res, next) => {
 
     // Verify flag (bcrypt comparison supporting both string and object flags)
     const targetFlagObj = challenge.flags[index];
+    if (!targetFlagObj) {
+      throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'Flag index not found in challenge definition');
+    }
     const targetFlagHash = typeof targetFlagObj === 'object' && targetFlagObj !== null ? targetFlagObj.flag : targetFlagObj;
-    const flagPoints = typeof targetFlagObj === 'object' && targetFlagObj !== null && targetFlagObj.points !== undefined ? targetFlagObj.points : 100;
+    
+    // Dynamic score calculation: Each challenge awards only its own score value.
+    // So each flag awards a portion of the challenge's overall score.
+    const flagPoints = Math.round(challenge.points / challenge.flags.length);
 
     const isMatch = await bcrypt.compare(flag, targetFlagHash);
     if (!isMatch) {
@@ -868,7 +1070,8 @@ export const submitChallengeFlag = async (req, res, next) => {
       throw new AppError(ErrorCatalog.CTF_FLAG_INCORRECT, `Incorrect flag. Ushbu flag uchun urinishlar: ${session.flagAttempts[faIndex].failedAttempts}/5`);
     }
 
-    const flagPointsAwarded = session.hintUsed ? Math.round(flagPoints * 0.8) : flagPoints;
+    const isFlagHintUnlocked = session.flagHintsUnlocked && session.flagHintsUnlocked.includes(index);
+    const flagPointsAwarded = isFlagHintUnlocked ? Math.round(flagPoints * 0.8) : flagPoints;
 
     // Record solved flag
     const solvedObj = {
@@ -966,9 +1169,20 @@ export const submitChallengeFlag = async (req, res, next) => {
         session = completedSession;
         fullyCompleted = true;
 
+        // Create permanent solve record
+        await ChallengeSolve.create({
+          userId,
+          teamId: team ? team._id : null,
+          challengeId,
+          pointsAwarded: session.solvedFlags.reduce((sum, sf) => sum + (sf.pointsAwarded || 0), 0)
+        }).catch(err => {
+          console.error('ChallengeSolve creation error:', err);
+        });
+
         if (mode === 'hackathon') {
           await Team.findByIdAndUpdate(team._id, {
-            $inc: { stars: challenge.stars }
+            $inc: { stars: challenge.stars },
+            $set: { finishTime: new Date() }
           });
 
           const statsField = `${challenge.difficulty}Solved`;
@@ -979,7 +1193,7 @@ export const submitChallengeFlag = async (req, res, next) => {
             const memberAlreadyCompleted = member.completedCtfs && member.completedCtfs.some(id => id.toString() === challengeId.toString());
 
             const updateData = {
-              $set: { lastActive: new Date() },
+              $set: { lastActive: new Date(), finishTime: new Date() },
               $inc: {
                 stars: challenge.stars,
                 'statistics.starsEarned': challenge.stars,
@@ -1012,6 +1226,7 @@ export const submitChallengeFlag = async (req, res, next) => {
             const alreadyCompleted = user.completedCtfs && user.completedCtfs.some(id => id.toString() === challengeId.toString());
             const statsField = `${challenge.difficulty}Solved`;
             const updateData = {
+              $set: { finishTime: new Date() },
               $inc: {
                 stars: challenge.stars,
                 'statistics.starsEarned': challenge.stars
@@ -1229,11 +1444,127 @@ export const finishChallenge = async (req, res, next) => {
       solvedAt: new Date()
     });
 
+    // Create permanent solve record if not exists
+    const hasSolve = await ChallengeSolve.exists({ userId, challengeId });
+    if (!hasSolve) {
+      await ChallengeSolve.create({
+        userId,
+        teamId: team ? team._id : null,
+        challengeId,
+        pointsAwarded: session.solvedFlags.reduce((sum, sf) => sum + (sf.pointsAwarded || 0), 0)
+      }).catch(err => {});
+    }
+
     res.status(200).json({
       success: true,
       message: 'Challenge finished successfully! Stars have been awarded.',
       data: {
         fullyCompleted: true
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const finishChallengeEarly = async (req, res, next) => {
+  try {
+    const { challengeId } = req.params;
+    const userId = req.user.userId;
+
+    const mode = await getChallengeMode(challengeId);
+    let session = null;
+    let team = null;
+
+    if (mode === 'hackathon') {
+      team = await Team.findOne({ members: userId });
+      if (!team) {
+        throw new AppError(ErrorCatalog.HACKATHON_TEAM_NOT_REGISTERED, 'Xakaton topshiriqlarini bajarish uchun jamoada bo\'lishingiz shart.');
+      }
+      session = await TeamChallenge.findOne({ teamId: team._id, challengeId, status: 'active' });
+    } else {
+      session = await ChallengeSession.findOne({ userId, challengeId, status: 'active' });
+    }
+
+    if (!session) {
+      throw new AppError(ErrorCatalog.CTF_SESSION_NOT_FOUND);
+    }
+
+    if (new Date() > session.expiresAt) {
+      session.status = 'expired';
+      await session.save();
+      throw new AppError(ErrorCatalog.CTF_SESSION_EXPIRED);
+    }
+
+    const challenge = await CTF.findById(challengeId);
+    if (!challenge) {
+      throw new AppError(ErrorCatalog.CTF_NOT_FOUND);
+    }
+
+    session.status = 'completed';
+    session.finishedAt = new Date();
+    await session.save();
+
+    const totalPointsAwarded = session.solvedFlags.reduce((sum, sf) => sum + (sf.pointsAwarded || 0), 0);
+    
+    await ChallengeSolve.create({
+      userId,
+      teamId: team ? team._id : null,
+      challengeId,
+      pointsAwarded: totalPointsAwarded
+    }).catch(err => {
+      console.error('ChallengeSolve creation error on finish early:', err);
+    });
+
+    if (mode === 'hackathon') {
+      await Team.findByIdAndUpdate(team._id, {
+        $set: { finishTime: new Date() }
+      });
+
+      await User.updateMany(
+        { _id: { $in: team.members } },
+        { $set: { finishTime: new Date() } }
+      );
+
+      const currentHackathon = await Hackathon.findOne({ challenges: challengeId });
+      if (currentHackathon) {
+        await LeaderboardService.updateTeamFinishTime(team._id, currentHackathon._id);
+      }
+
+      emitToTeam(team._id.toString(), 'team:score', { 
+        teamId: team._id.toString(),
+        points: team.points,
+        stars: team.stars
+      });
+    } else {
+      await User.findByIdAndUpdate(userId, {
+        $set: { finishTime: new Date() }
+      });
+    }
+
+    await LeaderboardService.recalculateUserRankings();
+    if (mode === 'hackathon') {
+      await LeaderboardService.recalculateTeamRankings();
+      emitToGlobal('leaderboard:refresh', {});
+    }
+
+    await AuditLog.create({
+      userId,
+      teamId: team ? team._id : null,
+      action: 'FINISH_CHALLENGE_EARLY',
+      status: 'success',
+      details: { challengeId },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent']
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Topshiriq muddatidan oldin yakunlandi.',
+      data: {
+        sessionId: session._id,
+        status: session.status,
+        finishedAt: session.finishedAt
       }
     });
   } catch (error) {

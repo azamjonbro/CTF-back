@@ -7,6 +7,7 @@ import ChallengeSession from '../models/ChallengeSession.js';
 import TeamChallenge from '../models/TeamChallenge.js';
 import Hackathon from '../models/Hackathon.js';
 import { LeaderboardService } from '../services/leaderboardService.js';
+import ChallengeSolve from '../models/ChallengeSolve.js';
 import { AppError, ErrorCatalog } from '../utils/errors.js';
 
 // Helper to get CTF history for a user
@@ -128,12 +129,24 @@ export const getPublicProfile = async (req, res, next) => {
     const ctfHistory = await getCtfHistory(user._id);
     const hackathonHistory = await getHackathonHistory(user._id);
 
+    const recentEvents = await AuditLog.find({ userId: user._id })
+      .sort({ createdAt: -1 })
+      .limit(5)
+      .select('action status createdAt details');
+
+    const recentSolves = await ChallengeSolve.find({ userId: user._id })
+      .sort({ solvedAt: -1 })
+      .limit(5)
+      .populate('challengeId', 'title category difficulty points');
+
     res.status(200).json({
       success: true,
       data: {
         ...user.toObject(),
         ctfHistory,
-        hackathonHistory
+        hackathonHistory,
+        recentEvents,
+        recentSolves
       }
     });
   } catch (error) {

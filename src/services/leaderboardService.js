@@ -3,6 +3,7 @@ import Team from '../models/Team.js';
 import ChallengeSession from '../models/ChallengeSession.js';
 import TeamChallenge from '../models/TeamChallenge.js';
 import Hackathon from '../models/Hackathon.js';
+import ChallengeSolve from '../models/ChallengeSolve.js';
 import mongoose from 'mongoose';
 import { emitToGlobal } from '../config/socket.js';
 
@@ -23,7 +24,19 @@ export class LeaderboardService {
 
   // Update rankings and cache previous rank to display position changes
   static async recalculateUserRankings() {
-    const users = await User.find({}).sort({ points: -1, stars: -1, createdAt: 1 }).select('_id ranking');
+    const users = await User.aggregate([
+      {
+        $addFields: {
+          sortFinishTime: { $ifNull: ['$finishTime', new Date('9999-12-31T23:59:59.999Z')] }
+        }
+      },
+      {
+        $sort: { points: -1, stars: -1, sortFinishTime: 1, createdAt: 1 }
+      },
+      {
+        $project: { _id: 1, ranking: 1 }
+      }
+    ]);
     
     const bulkOps = users.map((user, index) => {
       const newRank = index + 1;
@@ -87,7 +100,12 @@ export class LeaderboardService {
   // Get user leaderboard with ranks, surroundings, and changes
   static async getUserLeaderboard(userId = null, limit = 50, skip = 0) {
     const users = await User.aggregate([
-      { $sort: { points: -1, stars: -1 } },
+      {
+        $addFields: {
+          sortFinishTime: { $ifNull: ['$finishTime', new Date('9999-12-31T23:59:59.999Z')] }
+        }
+      },
+      { $sort: { points: -1, stars: -1, sortFinishTime: 1, createdAt: 1 } },
       {
         $project: {
           username: 1,
@@ -396,5 +414,214 @@ export class LeaderboardService {
     } else {
       await Team.findByIdAndUpdate(teamId, { $unset: { finishTime: 1 } });
     }
+  }
+
+  static async getFilteredUserLeaderboard(userId = null, limit = 50, skip = 0, filters = {}) {
+    let match = {};
+    if (filters.challengeId) {
+      match.challengeId = new mongoose.Types.ObjectId(filters.challengeId);
+    }
+    if (filters.startDate || filters.endDate) {
+      match.solvedAt = {};
+      if (filters.startDate) {
+        match.solvedAt.$gte = new Date(filters.startDate);
+      }
+      if (filters.endDate) {
+        match.solvedAt.$lte = new Date(filters.endDate);
+      }
+    }
+
+    let pipeline = [];
+    pipeline.push({ $match: match });
+
+    pipeline.push({
+      $lookup: {
+        from: 'ctfs',
+        localField: 'challengeId',
+        foreignField: '_id',
+        as: 'challenge'
+      }
+    });
+    pipeline.push({ $unwind: '$challenge' });
+
+    if (filters.category) {
+      pipeline.push({ $match: { 'challenge.category': filters.category } });
+    }
+
+    if (filters.hackathonId) {
+      const hackathon = await Hackathon.findById(filters.hackathonId);
+      if (hackathon) {
+        const challengeIds = hackathon.challenges.map(id => new mongoose.Types.ObjectId(id));
+        pipeline.push({ $match: { 'challengeId': { $in: challengeIds } } });
+      } else {
+        return { leaderboard: [], surrounding: { currentUserRank: null, above: [], below: [] } };
+      }
+    }
+
+    pipeline.push({
+      $group: {
+        _id: '$userId',
+        points: { $sum: '$pointsAwarded' },
+        stars: { $sum: '$challenge.stars' },
+        finishTime: { $max: '$solvedAt' }
+      }
+    });
+
+    pipeline.push({
+      $lookup: {
+        from: 'users',
+        localField: '_id',
+        foreignField: '_id',
+        as: 'user'
+      }
+    });
+    pipeline.push({ $unwind: '$user' });
+
+    pipeline.push({
+      $addFields: {
+        sortFinishTime: { $ifNull: ['$finishTime', new Date('9999-12-31T23:59:59.999Z')] }
+      }
+    });
+    pipeline.push({
+      $sort: { points: -1, stars: -1, sortFinishTime: 1 }
+    });
+
+    let sortedUsers = await ChallengeSolve.aggregate(pipeline);
+
+    sortedUsers = sortedUsers.map((item, idx) => {
+      return {
+        _id: item._id,
+        username: item.user.username,
+        profilePicture: item.user.profilePicture,
+        country: item.user.country,
+        points: item.points,
+        stars: item.stars,
+        ranking: idx + 1,
+        previousRanking: item.user.previousRanking || idx + 1,
+        positionChange: 0
+      };
+    });
+
+    let surrounding = { currentUserRank: null, above: [], below: [] };
+    if (userId) {
+      const currentIdx = sortedUsers.findIndex(u => u._id.toString() === userId.toString());
+      if (currentIdx !== -1) {
+        surrounding.currentUserRank = currentIdx + 1;
+        const aboveStart = Math.max(0, currentIdx - 3);
+        surrounding.above = sortedUsers.slice(aboveStart, currentIdx).reverse();
+        surrounding.below = sortedUsers.slice(currentIdx + 1, currentIdx + 4);
+      }
+    }
+
+    const paginatedUsers = sortedUsers.slice(skip, skip + limit);
+
+    return {
+      leaderboard: paginatedUsers,
+      surrounding
+    };
+  }
+
+  static async getFilteredTeamLeaderboard(teamId = null, limit = 50, skip = 0, filters = {}) {
+    let match = {};
+    if (filters.challengeId) {
+      match.challengeId = new mongoose.Types.ObjectId(filters.challengeId);
+    }
+    if (filters.startDate || filters.endDate) {
+      match.solvedAt = {};
+      if (filters.startDate) {
+        match.solvedAt.$gte = new Date(filters.startDate);
+      }
+      if (filters.endDate) {
+        match.solvedAt.$lte = new Date(filters.endDate);
+      }
+    }
+
+    let pipeline = [];
+    pipeline.push({ $match: { ...match, teamId: { $ne: null } } });
+
+    pipeline.push({
+      $lookup: {
+        from: 'ctfs',
+        localField: 'challengeId',
+        foreignField: '_id',
+        as: 'challenge'
+      }
+    });
+    pipeline.push({ $unwind: '$challenge' });
+
+    if (filters.category) {
+      pipeline.push({ $match: { 'challenge.category': filters.category } });
+    }
+
+    if (filters.hackathonId) {
+      const hackathon = await Hackathon.findById(filters.hackathonId);
+      if (hackathon) {
+        const challengeIds = hackathon.challenges.map(id => new mongoose.Types.ObjectId(id));
+        pipeline.push({ $match: { 'challengeId': { $in: challengeIds } } });
+      } else {
+        return { leaderboard: [], surrounding: { currentTeamRank: null, above: [], below: [] } };
+      }
+    }
+
+    pipeline.push({
+      $group: {
+        _id: '$teamId',
+        points: { $sum: '$pointsAwarded' },
+        stars: { $sum: '$challenge.stars' },
+        finishTime: { $max: '$solvedAt' }
+      }
+    });
+
+    pipeline.push({
+      $lookup: {
+        from: 'teams',
+        localField: '_id',
+        foreignField: '_id',
+        as: 'team'
+      }
+    });
+    pipeline.push({ $unwind: '$team' });
+
+    pipeline.push({
+      $addFields: {
+        sortFinishTime: { $ifNull: ['$finishTime', new Date('9999-12-31T23:59:59.999Z')] }
+      }
+    });
+    pipeline.push({
+      $sort: { points: -1, sortFinishTime: 1, stars: -1 }
+    });
+
+    let sortedTeams = await ChallengeSolve.aggregate(pipeline);
+
+    sortedTeams = sortedTeams.map((item, idx) => {
+      return {
+        _id: item._id,
+        name: item.team.name,
+        points: item.points,
+        stars: item.stars,
+        ranking: idx + 1,
+        previousRanking: item.team.ranking || idx + 1,
+        finishTime: item.finishTime,
+        positionChange: 0
+      };
+    });
+
+    let surrounding = { currentTeamRank: null, above: [], below: [] };
+    if (teamId) {
+      const currentIdx = sortedTeams.findIndex(t => t._id.toString() === teamId.toString());
+      if (currentIdx !== -1) {
+        surrounding.currentTeamRank = currentIdx + 1;
+        const aboveStart = Math.max(0, currentIdx - 3);
+        surrounding.above = sortedTeams.slice(aboveStart, currentIdx).reverse();
+        surrounding.below = sortedTeams.slice(currentIdx + 1, currentIdx + 4);
+      }
+    }
+
+    const paginatedTeams = sortedTeams.slice(skip, skip + limit);
+
+    return {
+      leaderboard: paginatedTeams,
+      surrounding
+    };
   }
 }

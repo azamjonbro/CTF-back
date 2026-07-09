@@ -6,8 +6,10 @@ export const generateAccessToken = (user) => {
     username: user.username,
     roles: user.roles,
   };
+  const isAdmin = user.roles && user.roles.includes('admin');
+  const expiry = isAdmin ? '7d' : (process.env.JWT_ACCESS_EXPIRY || '15m');
   return jwt.sign(payload, process.env.JWT_ACCESS_SECRET, {
-    expiresIn: process.env.JWT_ACCESS_EXPIRY || '15m'
+    expiresIn: expiry
   });
 };
 
@@ -16,8 +18,10 @@ export const generateRefreshToken = (user, deviceId) => {
     userId: user._id.toString(),
     deviceId: deviceId
   };
+  const isAdmin = user.roles && user.roles.includes('admin');
+  const expiry = isAdmin ? '30d' : (process.env.JWT_REFRESH_EXPIRY || '7d');
   return jwt.sign(payload, process.env.JWT_REFRESH_SECRET, {
-    expiresIn: process.env.JWT_REFRESH_EXPIRY || '7d'
+    expiresIn: expiry
   });
 };
 

@@ -9,8 +9,12 @@ const questionSchema = new mongoose.Schema({
 });
 
 const flagSchema = new mongoose.Schema({
+  title: { type: String, default: '' },
+  description: { type: String, default: '' },
+  hint: { type: String, default: '' },
   flag: { type: String, required: true },
-  points: { type: Number, required: true, default: 100, min: 0 }
+  points: { type: Number, required: true, default: 100, min: 0 },
+  attachment: { type: String, default: '' }
 });
 
 const ctfSchema = new mongoose.Schema({
