@@ -23,7 +23,10 @@ const challengeSolveSchema = new mongoose.Schema({
     type: Number,
     required: true,
     min: 0
-  }
+  },
+  solvedFlagsCount: { type: Number, default: 0 },
+  solvedQuestionsCount: { type: Number, default: 0 },
+  totalSolved: { type: Number, default: 0 }
 }, {
   timestamps: true
 });

@@ -58,6 +58,9 @@ const userSchema = new mongoose.Schema({
   totalScore: { type: Number, default: 0, index: true },
   ranking: { type: Number, default: 999999 },
   finishTime: { type: Date },
+  solvedFlagsCount: { type: Number, default: 0 },
+  solvedQuestionsCount: { type: Number, default: 0 },
+  totalSolved: { type: Number, default: 0 },
   roles: {
     type: [String],
     enum: ['admin', 'staff', 'support', 'team_leader', 'team_member'],

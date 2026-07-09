@@ -45,7 +45,10 @@ const teamSchema = new mongoose.Schema({
   }],
   finishTime: {
     type: Date
-  }
+  },
+  solvedFlagsCount: { type: Number, default: 0 },
+  solvedQuestionsCount: { type: Number, default: 0 },
+  totalSolved: { type: Number, default: 0 }
 }, {
   timestamps: true
 });

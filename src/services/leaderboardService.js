@@ -23,7 +23,91 @@ export class LeaderboardService {
   }
 
   // Update rankings and cache previous rank to display position changes
+  static async calculateUserStatsFromDb(userId) {
+    const sessions = await ChallengeSession.find({ userId });
+    const team = await Team.findOne({ members: userId });
+    let teamSessions = [];
+    if (team) {
+      teamSessions = await TeamChallenge.find({ teamId: team._id });
+    }
+
+    let solvedFlagsCount = 0;
+    let solvedQuestionsCount = 0;
+    let earnedFlagPoints = 0;
+    let earnedQuestionPoints = 0;
+
+    sessions.forEach(s => {
+      solvedFlagsCount += s.solvedFlags.length;
+      solvedQuestionsCount += s.solvedQuestions.length;
+      earnedFlagPoints += s.solvedFlags.reduce((sum, sf) => sum + (sf.pointsAwarded || 0), 0);
+      earnedQuestionPoints += s.solvedQuestions.reduce((sum, sq) => sum + (sq.pointsAwarded || 0), 0);
+    });
+
+    teamSessions.forEach(ts => {
+      solvedFlagsCount += ts.solvedFlags.length;
+      solvedQuestionsCount += ts.solvedQuestions.length;
+      earnedFlagPoints += ts.solvedFlags.reduce((sum, sf) => sum + (sf.pointsAwarded || 0), 0);
+      earnedQuestionPoints += ts.solvedQuestions.reduce((sum, sq) => sum + (sq.pointsAwarded || 0), 0);
+    });
+
+    const totalScore = earnedFlagPoints + earnedQuestionPoints;
+    const totalSolved = solvedFlagsCount + solvedQuestionsCount;
+    const participationCount = team ? team.hackathonsJoined.length : 0;
+
+    return {
+      totalScore,
+      totalSolved,
+      solvedFlagsCount,
+      solvedQuestionsCount,
+      participationCount
+    };
+  }
+
+  static async calculateTeamStatsFromDb(teamId) {
+    const teamSessions = await TeamChallenge.find({ teamId });
+
+    let solvedFlagsCount = 0;
+    let solvedQuestionsCount = 0;
+    let earnedFlagPoints = 0;
+    let earnedQuestionPoints = 0;
+
+    teamSessions.forEach(ts => {
+      solvedFlagsCount += ts.solvedFlags.length;
+      solvedQuestionsCount += ts.solvedQuestions.length;
+      earnedFlagPoints += ts.solvedFlags.reduce((sum, sf) => sum + (sf.pointsAwarded || 0), 0);
+      earnedQuestionPoints += ts.solvedQuestions.reduce((sum, sq) => sum + (sq.pointsAwarded || 0), 0);
+    });
+
+    const totalScore = earnedFlagPoints + earnedQuestionPoints;
+    const totalSolved = solvedFlagsCount + solvedQuestionsCount;
+
+    return {
+      totalScore,
+      totalSolved,
+      solvedFlagsCount,
+      solvedQuestionsCount
+    };
+  }
+
+  // Update rankings and cache previous rank to display position changes
   static async recalculateUserRankings() {
+    const allUsers = await User.find({});
+    for (const u of allUsers) {
+      const stats = await LeaderboardService.calculateUserStatsFromDb(u._id);
+      await User.updateOne(
+        { _id: u._id },
+        {
+          $set: {
+            points: stats.totalScore,
+            totalScore: stats.totalScore,
+            solvedFlagsCount: stats.solvedFlagsCount,
+            solvedQuestionsCount: stats.solvedQuestionsCount,
+            totalSolved: stats.totalSolved
+          }
+        }
+      );
+    }
+
     const users = await User.aggregate([
       {
         $addFields: {
@@ -31,7 +115,7 @@ export class LeaderboardService {
         }
       },
       {
-        $sort: { points: -1, stars: -1, sortFinishTime: 1, createdAt: 1 }
+        $sort: { points: -1, sortFinishTime: 1, createdAt: 1 }
       },
       {
         $project: { _id: 1, ranking: 1 }
@@ -61,6 +145,22 @@ export class LeaderboardService {
   }
 
   static async recalculateTeamRankings() {
+    const allTeams = await Team.find({});
+    for (const t of allTeams) {
+      const stats = await LeaderboardService.calculateTeamStatsFromDb(t._id);
+      await Team.updateOne(
+        { _id: t._id },
+        {
+          $set: {
+            points: stats.totalScore,
+            solvedFlagsCount: stats.solvedFlagsCount,
+            solvedQuestionsCount: stats.solvedQuestionsCount,
+            totalSolved: stats.totalSolved
+          }
+        }
+      );
+    }
+
     const teams = await Team.aggregate([
       {
         $addFields: {
@@ -68,7 +168,7 @@ export class LeaderboardService {
         }
       },
       {
-        $sort: { points: -1, sortFinishTime: 1, stars: -1, createdAt: 1 }
+        $sort: { points: -1, sortFinishTime: 1, createdAt: 1 }
       },
       {
         $project: { _id: 1, ranking: 1 }
@@ -105,12 +205,16 @@ export class LeaderboardService {
           sortFinishTime: { $ifNull: ['$finishTime', new Date('9999-12-31T23:59:59.999Z')] }
         }
       },
-      { $sort: { points: -1, stars: -1, sortFinishTime: 1, createdAt: 1 } },
+      { $sort: { points: -1, sortFinishTime: 1, createdAt: 1 } },
       {
         $project: {
           username: 1,
           points: 1,
           stars: 1,
+          solvedFlagsCount: 1,
+          solvedQuestionsCount: 1,
+          totalSolved: 1,
+          finishTime: 1,
           ranking: 1,
           previousRanking: 1,
           profilePicture: 1,
@@ -138,12 +242,12 @@ export class LeaderboardService {
         // Find users directly above (ranks smaller than user ranking)
         surrounding.above = await User.find({ ranking: { $lt: currentUser.ranking, $gte: Math.max(1, currentUser.ranking - 3) } })
           .sort({ ranking: -1 })
-          .select('username points stars ranking profilePicture country');
+          .select('username points stars ranking profilePicture country solvedFlagsCount solvedQuestionsCount totalSolved finishTime');
 
         // Find users directly below (ranks greater than user ranking)
         surrounding.below = await User.find({ ranking: { $gt: currentUser.ranking, $lte: currentUser.ranking + 3 } })
           .sort({ ranking: 1 })
-          .select('username points stars ranking profilePicture country');
+          .select('username points stars ranking profilePicture country solvedFlagsCount solvedQuestionsCount totalSolved finishTime');
       }
     }
 
@@ -162,15 +266,18 @@ export class LeaderboardService {
           sortFinishTime: { $ifNull: ['$finishTime', new Date('9999-12-31T23:59:59.999Z')] }
         }
       },
-      { $sort: { points: -1, sortFinishTime: 1, stars: -1 } },
+      { $sort: { points: -1, sortFinishTime: 1, createdAt: 1 } },
       {
         $project: {
           name: 1,
           points: 1,
           stars: 1,
+          solvedFlagsCount: 1,
+          solvedQuestionsCount: 1,
+          totalSolved: 1,
+          finishTime: 1,
           ranking: 1,
           previousRanking: 1,
-          finishTime: 1,
           positionChange: {
             $cond: {
               if: { $or: [{ $eq: ['$previousRanking', 999999] }, { $not: ['$previousRanking'] }] },
@@ -205,7 +312,7 @@ export class LeaderboardService {
 
         const rawAbove = await Team.find({ ranking: { $lt: currentTeam.ranking, $gte: Math.max(1, currentTeam.ranking - 3) } })
           .sort({ ranking: -1 })
-          .select('name points stars ranking finishTime');
+          .select('name points stars ranking finishTime solvedFlagsCount solvedQuestionsCount totalSolved');
         
         surrounding.above = rawAbove.map(a => {
           let formattedFinishTime = '—';
@@ -221,7 +328,7 @@ export class LeaderboardService {
 
         const rawBelow = await Team.find({ ranking: { $gt: currentTeam.ranking, $lte: currentTeam.ranking + 3 } })
           .sort({ ranking: 1 })
-          .select('name points stars ranking finishTime');
+          .select('name points stars ranking finishTime solvedFlagsCount solvedQuestionsCount totalSolved');
 
         surrounding.below = rawBelow.map(b => {
           let formattedFinishTime = '—';

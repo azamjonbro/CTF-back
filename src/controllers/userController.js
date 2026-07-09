@@ -139,10 +139,18 @@ export const getPublicProfile = async (req, res, next) => {
       .limit(5)
       .populate('challengeId', 'title category difficulty points');
 
+    const dbStats = await LeaderboardService.calculateUserStatsFromDb(user._id);
+
     res.status(200).json({
       success: true,
       data: {
         ...user.toObject(),
+        points: dbStats.totalScore,
+        totalScore: dbStats.totalScore,
+        solvedFlagsCount: dbStats.solvedFlagsCount,
+        solvedQuestionsCount: dbStats.solvedQuestionsCount,
+        totalSolved: dbStats.totalSolved,
+        participationCount: dbStats.participationCount,
         ctfHistory,
         hackathonHistory,
         recentEvents,

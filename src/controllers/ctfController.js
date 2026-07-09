@@ -205,6 +205,7 @@ export const getChallengeDetails = async (req, res, next) => {
         challengeId: challenge._id,
         isSolved: !!isSolved,
         title: challenge.title,
+        shortDescription: challenge.shortDescription,
         longDescription: challenge.longDescription,
         difficulty: challenge.difficulty,
         stars: challenge.stars,
@@ -842,7 +843,10 @@ export const submitQuestionAnswer = async (req, res, next) => {
       throw new AppError(ErrorCatalog.CTF_FLAG_INCORRECT, `Incorrect answer. Ushbu savol uchun urinishlar: ${session.questionAttempts[qaIndex].failedAttempts}/5`);
     }
 
-    const scoreAwarded = 0;
+    // Calculate points to award
+    const questionPoints = question.points !== undefined ? question.points : 10;
+    const isHintUnlocked = session.hintsUnlocked && session.hintsUnlocked.some(hu => hu.questionId.toString() === questionId.toString());
+    const scoreAwarded = isHintUnlocked ? Math.round(questionPoints * 0.8) : questionPoints;
 
     const solvedObj = {
       questionId: new mongoose.Types.ObjectId(questionId),
@@ -1049,8 +1053,10 @@ export const submitChallengeFlag = async (req, res, next) => {
     const targetFlagHash = typeof targetFlagObj === 'object' && targetFlagObj !== null ? targetFlagObj.flag : targetFlagObj;
     
     // Dynamic score calculation: Each challenge awards only its own score value.
-    // So each flag awards a portion of the challenge's overall score.
-    const flagPoints = Math.round(challenge.points / challenge.flags.length);
+    // So each flag awards a portion of the challenge's overall score after subtracting question points.
+    const sumQuestionsPoints = challenge.questions.reduce((sum, q) => sum + (q.points !== undefined ? q.points : 10), 0);
+    const flagsTotalPoints = Math.max(0, challenge.points - sumQuestionsPoints);
+    const flagPoints = Math.round(flagsTotalPoints / challenge.flags.length);
 
     const isMatch = await bcrypt.compare(flag, targetFlagHash);
     if (!isMatch) {
@@ -1174,7 +1180,12 @@ export const submitChallengeFlag = async (req, res, next) => {
           userId,
           teamId: team ? team._id : null,
           challengeId,
-          pointsAwarded: session.solvedFlags.reduce((sum, sf) => sum + (sf.pointsAwarded || 0), 0)
+          pointsAwarded: 
+            session.solvedFlags.reduce((sum, sf) => sum + (sf.pointsAwarded || 0), 0) +
+            session.solvedQuestions.reduce((sum, sq) => sum + (sq.pointsAwarded || 0), 0),
+          solvedFlagsCount: session.solvedFlags.length,
+          solvedQuestionsCount: session.solvedQuestions.length,
+          totalSolved: session.solvedFlags.length + session.solvedQuestions.length
         }).catch(err => {
           console.error('ChallengeSolve creation error:', err);
         });
@@ -1451,7 +1462,12 @@ export const finishChallenge = async (req, res, next) => {
         userId,
         teamId: team ? team._id : null,
         challengeId,
-        pointsAwarded: session.solvedFlags.reduce((sum, sf) => sum + (sf.pointsAwarded || 0), 0)
+        pointsAwarded: 
+          session.solvedFlags.reduce((sum, sf) => sum + (sf.pointsAwarded || 0), 0) +
+          session.solvedQuestions.reduce((sum, sq) => sum + (sq.pointsAwarded || 0), 0),
+        solvedFlagsCount: session.solvedFlags.length,
+        solvedQuestionsCount: session.solvedQuestions.length,
+        totalSolved: session.solvedFlags.length + session.solvedQuestions.length
       }).catch(err => {});
     }
 
@@ -1505,13 +1521,18 @@ export const finishChallengeEarly = async (req, res, next) => {
     session.finishedAt = new Date();
     await session.save();
 
-    const totalPointsAwarded = session.solvedFlags.reduce((sum, sf) => sum + (sf.pointsAwarded || 0), 0);
+    const totalPointsAwarded = 
+      session.solvedFlags.reduce((sum, sf) => sum + (sf.pointsAwarded || 0), 0) +
+      session.solvedQuestions.reduce((sum, sq) => sum + (sq.pointsAwarded || 0), 0);
     
     await ChallengeSolve.create({
       userId,
       teamId: team ? team._id : null,
       challengeId,
-      pointsAwarded: totalPointsAwarded
+      pointsAwarded: totalPointsAwarded,
+      solvedFlagsCount: session.solvedFlags.length,
+      solvedQuestionsCount: session.solvedQuestions.length,
+      totalSolved: session.solvedFlags.length + session.solvedQuestions.length
     }).catch(err => {
       console.error('ChallengeSolve creation error on finish early:', err);
     });
