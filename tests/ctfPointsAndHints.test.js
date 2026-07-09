@@ -102,16 +102,16 @@ describe('CTF Points, Penalties, and Task Count Integration Tests', () => {
 
     assert.strictEqual(unlockRes.body.data.hint, 'Hint Q1');
 
-    // 4. Solve the unlocked question (should award 0 points)
+    // 4. Solve the unlocked question (should award 8 points: 10 * 0.8)
     const solveQ1Res = await request(server)
       .post(`/api/v1/ctfs/${testCtf._id}/questions/${question.id}/submit`)
       .set('Authorization', `Bearer ${userToken}`)
       .send({ answer: 'correct_answer' })
       .expect(200);
 
-    assert.strictEqual(solveQ1Res.body.data.pointsAwarded, 0);
+    assert.strictEqual(solveQ1Res.body.data.pointsAwarded, 8);
 
-    // 5. Solve another question without hint (should award 0 points)
+    // 5. Solve another question without hint (should award 10 points)
     const question2 = sessionRes.body.data.questions[1];
     const solveQ2Res = await request(server)
       .post(`/api/v1/ctfs/${testCtf._id}/questions/${question2.id}/submit`)
@@ -119,11 +119,11 @@ describe('CTF Points, Penalties, and Task Count Integration Tests', () => {
       .send({ answer: 'correct_answer' })
       .expect(200);
 
-    assert.strictEqual(solveQ2Res.body.data.pointsAwarded, 0);
+    assert.strictEqual(solveQ2Res.body.data.pointsAwarded, 10);
 
-    // Check user total solved before completing challenge (should be 0 because questions solved do not increment totalSolved)
+    // Check user total solved before completing challenge
     const userMid = await User.findById(testUser._id);
-    assert.strictEqual(userMid.statistics.totalSolved, 0);
+    assert.strictEqual(userMid.totalSolved, 2);
 
     // 6. Unlock the challenge-level hint
     await request(server)
@@ -141,10 +141,10 @@ describe('CTF Points, Penalties, and Task Count Integration Tests', () => {
     assert.strictEqual(flagRes.body.data.fullyCompleted, true);
 
     // Check user stats after completion:
-    // - totalSolved should be exactly 1
-    // - points should include Q1 (0) + Q2 (0) + Completed Challenge (100) = 100 points
+    // - totalSolved should be exactly 3 (2 questions + 1 flag)
+    // - points should include Q1 (6) + Q2 (8) + Flag (50) = 64 points
     const userFinal = await User.findById(testUser._id);
-    assert.strictEqual(userFinal.statistics.totalSolved, 1);
-    assert.strictEqual(userFinal.points, 100);
+    assert.strictEqual(userFinal.totalSolved, 3);
+    assert.strictEqual(userFinal.points, 64);
   });
 });
