@@ -320,4 +320,99 @@ describe('New Features & Manual Finish Integration Tests', () => {
     // 5. Clean up
     await CTF.deleteOne({ _id: ctfRestrict._id });
   });
+
+  it('should allow individual users without a team to play practice mode challenges, but block them for hackathon mode', async () => {
+    // Create new user NOT in any team
+    const standaloneUser = new User({
+      username: 'standaloneuser_' + Date.now(),
+      email: 'standalone_' + Date.now() + '@ctf.io',
+      passwordHash: 'hashedpassword',
+      roles: ['team_member']
+    });
+    await standaloneUser.save();
+    const standaloneToken = generateAccessToken(standaloneUser);
+
+    // Create a practice mode challenge (not associated with any active/upcoming hackathon)
+    const practiceCtf = new CTF({
+      title: 'Practice Challenge ' + Date.now(),
+      shortDescription: 'desc',
+      longDescription: 'desc',
+      difficulty: 'easy',
+      stars: 1,
+      category: 'Web',
+      author: testAdmin._id,
+      status: 'active',
+      timerMinutes: 30,
+      flags: [{ flag: 'FLAG{practice}', points: 100 }],
+      questions: [
+        { title: 'Q1', description: 'd', answer: 'a', hint: 'h' },
+        { title: 'Q2', description: 'd', answer: 'a', hint: 'h' },
+        { title: 'Q3', description: 'd', answer: 'a', hint: 'h' },
+        { title: 'Q4', description: 'd', answer: 'a', hint: 'h' },
+        { title: 'Q5', description: 'd', answer: 'a', hint: 'h' }
+      ]
+    });
+    await practiceCtf.save();
+
+    // 1. Standalone user starts the session successfully in practice mode
+    await request(server)
+      .post(`/api/v1/ctfs/${practiceCtf._id}/session`)
+      .set('Authorization', `Bearer ${standaloneToken}`)
+      .expect(200);
+
+    // 2. Standalone user gets challenge details successfully
+    const detailsRes = await request(server)
+      .get(`/api/v1/ctfs/${practiceCtf._id}`)
+      .set('Authorization', `Bearer ${standaloneToken}`)
+      .expect(200);
+    assert.strictEqual(detailsRes.body.success, true);
+    assert.strictEqual(detailsRes.body.data.hasActiveSession, true);
+
+    // Create a hackathon challenge (bound to an active hackathon)
+    const hackathonCtf = new CTF({
+      title: 'Hackathon Challenge ' + Date.now(),
+      shortDescription: 'desc',
+      longDescription: 'desc',
+      difficulty: 'medium',
+      stars: 3,
+      category: 'Pwn',
+      author: testAdmin._id,
+      status: 'active',
+      timerMinutes: 60,
+      flags: [{ flag: 'FLAG{hackathon}', points: 100 }],
+      questions: [
+        { title: 'Q1', description: 'd', answer: 'a', hint: 'h' },
+        { title: 'Q2', description: 'd', answer: 'a', hint: 'h' },
+        { title: 'Q3', description: 'd', answer: 'a', hint: 'h' },
+        { title: 'Q4', description: 'd', answer: 'a', hint: 'h' },
+        { title: 'Q5', description: 'd', answer: 'a', hint: 'h' }
+      ]
+    });
+    await hackathonCtf.save();
+
+    const hackathon = new Hackathon({
+      name: 'Active Test Hackathon ' + Date.now(),
+      description: 'desc',
+      hackathonStart: new Date(Date.now() - 3600000), // started 1h ago
+      hackathonEnd: new Date(Date.now() + 3600000), // ends in 1h
+      maxTeams: 10,
+      status: 'active',
+      challenges: [hackathonCtf._id]
+    });
+    await hackathon.save();
+
+    // 3. Attempting to start session for hackathon challenge without team should fail
+    const startHackathonRes = await request(server)
+      .post(`/api/v1/ctfs/${hackathonCtf._id}/session`)
+      .set('Authorization', `Bearer ${standaloneToken}`)
+      .expect(400); // Bad request / forbidden because user is not in a team
+
+    assert.strictEqual(startHackathonRes.body.success, false);
+
+    // Clean up
+    await User.deleteOne({ _id: standaloneUser._id });
+    await CTF.deleteOne({ _id: practiceCtf._id });
+    await CTF.deleteOne({ _id: hackathonCtf._id });
+    await Hackathon.deleteOne({ _id: hackathon._id });
+  });
 });
