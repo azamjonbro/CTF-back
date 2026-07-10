@@ -9,21 +9,21 @@ import { upload } from '../middlewares/upload.js';
 
 const router = express.Router();
 
-// PLAYER ROUTES (Require team participation)
+// PLAYER ROUTES (Require team participation only in hackathon mode, checked in controller)
 router.get('/', authenticate, getChallenges);
 router.get('/:challengeId', authenticate, getChallengeDetails);
-router.post('/:challengeId/session', authenticate, requireTeam, startChallengeSession);
-router.post('/:challengeId/questions/:questionId/submit', authenticate, validateRequest(submitAnswerSchema), requireTeam, submitQuestionAnswer);
-router.post('/:challengeId/flags/:flagIndex/submit', authenticate, validateRequest(submitFlagSchema), requireTeam, submitChallengeFlag);
-router.post('/:challengeId/questions/:questionId/hint/unlock', authenticate, requireTeam, unlockQuestionHint);
-router.post('/:challengeId/flags/:flagIndex/hint/unlock', authenticate, requireTeam, unlockFlagHint);
-router.post('/:challengeId/hint/unlock', authenticate, requireTeam, unlockChallengeHint);
-router.post('/:challengeId/finish', authenticate, requireTeam, finishChallenge);
-router.post('/:challengeId/finish-early', authenticate, requireTeam, finishChallengeEarly);
+router.post('/:challengeId/session', authenticate, startChallengeSession);
+router.post('/:challengeId/questions/:questionId/submit', authenticate, validateRequest(submitAnswerSchema), submitQuestionAnswer);
+router.post('/:challengeId/flags/:flagIndex/submit', authenticate, validateRequest(submitFlagSchema), submitChallengeFlag);
+router.post('/:challengeId/questions/:questionId/hint/unlock', authenticate, unlockQuestionHint);
+router.post('/:challengeId/flags/:flagIndex/hint/unlock', authenticate, unlockFlagHint);
+router.post('/:challengeId/hint/unlock', authenticate, unlockChallengeHint);
+router.post('/:challengeId/finish', authenticate, finishChallenge);
+router.post('/:challengeId/finish-early', authenticate, finishChallengeEarly);
 
 // Plural Standard API routes
-router.post('/:challengeId/questions/:questionId/hints/unlock', authenticate, requireTeam, unlockQuestionHint);
-router.post('/:challengeId/questions/:questionId/flags/:flagId/hints/unlock', authenticate, requireTeam, (req, res, next) => {
+router.post('/:challengeId/questions/:questionId/hints/unlock', authenticate, unlockQuestionHint);
+router.post('/:challengeId/questions/:questionId/flags/:flagId/hints/unlock', authenticate, (req, res, next) => {
   req.params.flagIndex = req.params.flagId;
   return unlockFlagHint(req, res, next);
 });

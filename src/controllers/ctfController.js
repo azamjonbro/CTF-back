@@ -113,9 +113,10 @@ const checkCTFStartAndStatus = async (challengeId, userId, res) => {
 
   if (mode === 'hackathon') {
     team = await Team.findOne({ members: userId });
-    if (team) {
-      sessionExists = await TeamChallenge.exists({ teamId: team._id, challengeId });
+    if (!team) {
+      throw new AppError(ErrorCatalog.HACKATHON_TEAM_NOT_REGISTERED, 'Xakaton topshiriqlarini bajarish uchun jamoada bo\'lishingiz shart.');
     }
+    sessionExists = await TeamChallenge.exists({ teamId: team._id, challengeId });
   } else {
     sessionExists = await ChallengeSession.exists({ userId, challengeId });
   }
