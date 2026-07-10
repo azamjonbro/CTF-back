@@ -94,6 +94,43 @@ export const getChallenges = async (req, res, next) => {
   }
 };
 
+const checkCTFStartAndStatus = async (challengeId, userId, res) => {
+  // Check CTF challenge status
+  const challenge = await CTF.findById(challengeId);
+  if (!challenge) {
+    throw new AppError(ErrorCatalog.CTF_NOT_FOUND);
+  }
+  if (challenge.status === 'finished') {
+    throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'Ushbu topshiriq faol emas yoki yakunlangan.');
+  }
+  if (challenge.status !== 'active') {
+    throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'Topshiriq faol emas.');
+  }
+
+  const mode = await getChallengeMode(challengeId);
+  let sessionExists = false;
+  let team = null;
+
+  if (mode === 'hackathon') {
+    team = await Team.findOne({ members: userId });
+    if (team) {
+      sessionExists = await TeamChallenge.exists({ teamId: team._id, challengeId });
+    }
+  } else {
+    sessionExists = await ChallengeSession.exists({ userId, challengeId });
+  }
+
+  if (!sessionExists) {
+    res.status(403).json({
+      success: false,
+      message: "You must start the CTF before accessing challenges."
+    });
+    return null;
+  }
+
+  return { challenge, mode, team };
+};
+
 // Open a challenge details view or retrieve existing session details
 export const getChallengeDetails = async (req, res, next) => {
   try {
@@ -129,7 +166,19 @@ export const getChallengeDetails = async (req, res, next) => {
       isSolved = await ChallengeSolve.exists({ userId, challengeId });
     }
 
+    const hackathon = await Hackathon.findOne({
+      challenges: challengeId,
+      status: { $in: ['upcoming', 'active'] }
+    });
+
     if (!session) {
+      let participantCount = 0;
+      if (mode === 'hackathon') {
+        participantCount = await TeamChallenge.countDocuments({ challengeId });
+      } else {
+        participantCount = await ChallengeSession.countDocuments({ challengeId });
+      }
+
       return res.status(200).json({
         success: true,
         data: {
@@ -140,22 +189,10 @@ export const getChallengeDetails = async (req, res, next) => {
             title: challenge.title,
             shortDescription: challenge.shortDescription,
             longDescription: challenge.longDescription,
-            difficulty: challenge.difficulty,
-            stars: challenge.stars,
-            category: challenge.category,
             timerMinutes: challenge.timerMinutes,
-            image: challenge.image,
-            attachments: challenge.attachments || [],
-            questionsCount: challenge.questions.length,
-            flagsCount: challenge.flags.length,
-            flags: challenge.flags.map((f, i) => ({
-              title: f.title || `Flag #${i + 1}`,
-              description: f.description || '',
-              points: Math.round(challenge.points / challenge.flags.length),
-              hasHint: !!f.hint
-            })),
-            hasHint: !!challenge.hint,
-            isSolved: !!isSolved
+            startTime: hackathon ? hackathon.hackathonStart : challenge.createdAt,
+            endTime: hackathon ? hackathon.hackathonEnd : (challenge.endTime || null),
+            participantCount
           }
         }
       });
@@ -226,7 +263,9 @@ export const getChallengeDetails = async (req, res, next) => {
         questions: questionsWithoutAnswers,
         flags: flagsProjected,
         solvedFlags: session.solvedFlags || [],
-        flagsCount: challenge.flags.length
+        flagsCount: challenge.flags.length,
+        startTime: hackathon ? hackathon.hackathonStart : challenge.createdAt,
+        endTime: hackathon ? hackathon.hackathonEnd : (challenge.endTime || null)
       }
     });
   } catch (error) {
@@ -390,15 +429,12 @@ export const unlockQuestionHint = async (req, res, next) => {
     const { challengeId, questionId } = req.params;
     const userId = req.user.userId;
 
-    const mode = await getChallengeMode(challengeId);
-    let session = null;
-    let team = null;
+    const precheck = await checkCTFStartAndStatus(challengeId, userId, res);
+    if (!precheck) return;
+    const { challenge, mode, team } = precheck;
 
+    let session = null;
     if (mode === 'hackathon') {
-      team = await Team.findOne({ members: userId });
-      if (!team) {
-        throw new AppError(ErrorCatalog.HACKATHON_TEAM_NOT_REGISTERED, 'Xakaton topshiriqlarini bajarish uchun jamoada bo\'lishingiz shart.');
-      }
       session = await TeamChallenge.findOne({ teamId: team._id, challengeId, status: 'active' });
     } else {
       session = await ChallengeSession.findOne({ userId, challengeId, status: 'active' });
@@ -412,11 +448,6 @@ export const unlockQuestionHint = async (req, res, next) => {
       session.status = 'expired';
       await session.save();
       throw new AppError(ErrorCatalog.CTF_SESSION_EXPIRED);
-    }
-
-    const challenge = await CTF.findById(challengeId);
-    if (!challenge) {
-      throw new AppError(ErrorCatalog.CTF_NOT_FOUND);
     }
 
     const question = challenge.questions.id(questionId);
@@ -509,15 +540,12 @@ export const unlockFlagHint = async (req, res, next) => {
       throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'Invalid flag index');
     }
 
-    const mode = await getChallengeMode(challengeId);
-    let session = null;
-    let team = null;
+    const precheck = await checkCTFStartAndStatus(challengeId, userId, res);
+    if (!precheck) return;
+    const { challenge, mode, team } = precheck;
 
+    let session = null;
     if (mode === 'hackathon') {
-      team = await Team.findOne({ members: userId });
-      if (!team) {
-        throw new AppError(ErrorCatalog.HACKATHON_TEAM_NOT_REGISTERED, 'Xakaton topshiriqlarini bajarish uchun jamoada bo\'lishingiz shart.');
-      }
       session = await TeamChallenge.findOne({ teamId: team._id, challengeId, status: 'active' });
     } else {
       session = await ChallengeSession.findOne({ userId, challengeId, status: 'active' });
@@ -531,11 +559,6 @@ export const unlockFlagHint = async (req, res, next) => {
       session.status = 'expired';
       await session.save();
       throw new AppError(ErrorCatalog.CTF_SESSION_EXPIRED);
-    }
-
-    const challenge = await CTF.findById(challengeId);
-    if (!challenge) {
-      throw new AppError(ErrorCatalog.CTF_NOT_FOUND);
     }
 
     const flagObj = challenge.flags[index];
@@ -627,15 +650,12 @@ export const unlockChallengeHint = async (req, res, next) => {
     const { challengeId } = req.params;
     const userId = req.user.userId;
 
-    const mode = await getChallengeMode(challengeId);
-    let session = null;
-    let team = null;
+    const precheck = await checkCTFStartAndStatus(challengeId, userId, res);
+    if (!precheck) return;
+    const { challenge, mode, team } = precheck;
 
+    let session = null;
     if (mode === 'hackathon') {
-      team = await Team.findOne({ members: userId });
-      if (!team) {
-        throw new AppError(ErrorCatalog.HACKATHON_TEAM_NOT_REGISTERED, 'Xakaton topshiriqlarini bajarish uchun jamoada bo\'lishingiz shart.');
-      }
       session = await TeamChallenge.findOne({ teamId: team._id, challengeId, status: 'active' });
     } else {
       session = await ChallengeSession.findOne({ userId, challengeId, status: 'active' });
@@ -649,11 +669,6 @@ export const unlockChallengeHint = async (req, res, next) => {
       session.status = 'expired';
       await session.save();
       throw new AppError(ErrorCatalog.CTF_SESSION_EXPIRED);
-    }
-
-    const challenge = await CTF.findById(challengeId);
-    if (!challenge) {
-      throw new AppError(ErrorCatalog.CTF_NOT_FOUND);
     }
 
     if (session.hintOpened || session.hintUsed || session.penaltyApplied) {
@@ -765,15 +780,12 @@ export const submitQuestionAnswer = async (req, res, next) => {
     const { answer } = req.body;
     const userId = req.user.userId;
 
-    const mode = await getChallengeMode(challengeId);
-    let session = null;
-    let team = null;
+    const precheck = await checkCTFStartAndStatus(challengeId, userId, res);
+    if (!precheck) return;
+    const { challenge, mode, team } = precheck;
 
+    let session = null;
     if (mode === 'hackathon') {
-      team = await Team.findOne({ members: userId });
-      if (!team) {
-        throw new AppError(ErrorCatalog.HACKATHON_TEAM_NOT_REGISTERED, 'Xakaton topshiriqlarini bajarish uchun jamoada bo\'lishingiz shart.');
-      }
       session = await TeamChallenge.findOne({ teamId: team._id, challengeId, status: 'active' });
     } else {
       session = await ChallengeSession.findOne({ userId, challengeId, status: 'active' });
@@ -805,10 +817,6 @@ export const submitQuestionAnswer = async (req, res, next) => {
       throw new AppError(ErrorCatalog.CTF_ALREADY_SOLVED);
     }
 
-    const challenge = await CTF.findById(challengeId);
-    if (!challenge) {
-      throw new AppError(ErrorCatalog.CTF_NOT_FOUND);
-    }
     if (challenge.status === 'finished') {
       throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'Ushbu topshiriq yakunlangan va javoblar qabul qilinmaydi.');
     }
@@ -970,15 +978,12 @@ export const submitChallengeFlag = async (req, res, next) => {
     const { flag } = req.body;
     const userId = req.user.userId;
 
-    const mode = await getChallengeMode(challengeId);
-    let session = null;
-    let team = null;
+    const precheck = await checkCTFStartAndStatus(challengeId, userId, res);
+    if (!precheck) return;
+    const { challenge, mode, team } = precheck;
 
+    let session = null;
     if (mode === 'hackathon') {
-      team = await Team.findOne({ members: userId });
-      if (!team) {
-        throw new AppError(ErrorCatalog.HACKATHON_TEAM_NOT_REGISTERED, 'Xakaton topshiriqlarini bajarish uchun jamoada bo\'lishingiz shart.');
-      }
       session = await TeamChallenge.findOne({ teamId: team._id, challengeId, status: 'active' });
     } else {
       session = await ChallengeSession.findOne({ userId, challengeId, status: 'active' });
@@ -997,11 +1002,6 @@ export const submitChallengeFlag = async (req, res, next) => {
     const index = parseInt(flagIndex, 10);
     if (isNaN(index)) {
       throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'Invalid flag index');
-    }
-
-    const challenge = await CTF.findById(challengeId);
-    if (!challenge) {
-      throw new AppError(ErrorCatalog.CTF_NOT_FOUND);
     }
     if (challenge.status === 'finished') {
       throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'Ushbu topshiriq yakunlangan va flaglar qabul qilinmaydi.');
@@ -1309,15 +1309,12 @@ export const finishChallenge = async (req, res, next) => {
     const { challengeId } = req.params;
     const userId = req.user.userId;
 
-    const mode = await getChallengeMode(challengeId);
-    let session = null;
-    let team = null;
+    const precheck = await checkCTFStartAndStatus(challengeId, userId, res);
+    if (!precheck) return;
+    const { challenge, mode, team } = precheck;
 
+    let session = null;
     if (mode === 'hackathon') {
-      team = await Team.findOne({ members: userId });
-      if (!team) {
-        throw new AppError(ErrorCatalog.HACKATHON_TEAM_NOT_REGISTERED, 'Xakaton topshiriqlarini bajarish uchun jamoada bo\'lishingiz shart.');
-      }
       session = await TeamChallenge.findOne({ teamId: team._id, challengeId });
     } else {
       session = await ChallengeSession.findOne({ userId, challengeId });
@@ -1339,11 +1336,6 @@ export const finishChallenge = async (req, res, next) => {
 
     if (session.status !== 'active') {
       throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'Sessiya allaqachon yakunlangan yoki muddati tugagan.');
-    }
-
-    const challenge = await CTF.findById(challengeId);
-    if (!challenge) {
-      throw new AppError(ErrorCatalog.CTF_NOT_FOUND);
     }
 
     const solvedIndexes = session.solvedFlags.map(sf => sf.flagIndex);
@@ -1488,15 +1480,12 @@ export const finishChallengeEarly = async (req, res, next) => {
     const { challengeId } = req.params;
     const userId = req.user.userId;
 
-    const mode = await getChallengeMode(challengeId);
-    let session = null;
-    let team = null;
+    const precheck = await checkCTFStartAndStatus(challengeId, userId, res);
+    if (!precheck) return;
+    const { challenge, mode, team } = precheck;
 
+    let session = null;
     if (mode === 'hackathon') {
-      team = await Team.findOne({ members: userId });
-      if (!team) {
-        throw new AppError(ErrorCatalog.HACKATHON_TEAM_NOT_REGISTERED, 'Xakaton topshiriqlarini bajarish uchun jamoada bo\'lishingiz shart.');
-      }
       session = await TeamChallenge.findOne({ teamId: team._id, challengeId, status: 'active' });
     } else {
       session = await ChallengeSession.findOne({ userId, challengeId, status: 'active' });
@@ -1510,11 +1499,6 @@ export const finishChallengeEarly = async (req, res, next) => {
       session.status = 'expired';
       await session.save();
       throw new AppError(ErrorCatalog.CTF_SESSION_EXPIRED);
-    }
-
-    const challenge = await CTF.findById(challengeId);
-    if (!challenge) {
-      throw new AppError(ErrorCatalog.CTF_NOT_FOUND);
     }
 
     session.status = 'completed';
@@ -1601,15 +1585,12 @@ export const openHint = async (req, res, next) => {
     }
     const userId = req.user.userId;
 
-    const mode = await getChallengeMode(challengeId);
-    let session = null;
-    let team = null;
+    const precheck = await checkCTFStartAndStatus(challengeId, userId, res);
+    if (!precheck) return;
+    const { challenge, mode, team } = precheck;
 
+    let session = null;
     if (mode === 'hackathon') {
-      team = await Team.findOne({ members: userId });
-      if (!team) {
-        throw new AppError(ErrorCatalog.HACKATHON_TEAM_NOT_REGISTERED, 'Xakaton topshiriqlarini bajarish uchun jamoada bo\'lishingiz shart.');
-      }
       session = await TeamChallenge.findOne({ teamId: team._id, challengeId, status: 'active' });
     } else {
       session = await ChallengeSession.findOne({ userId, challengeId, status: 'active' });
@@ -1623,11 +1604,6 @@ export const openHint = async (req, res, next) => {
       session.status = 'expired';
       await session.save();
       throw new AppError(ErrorCatalog.CTF_SESSION_EXPIRED);
-    }
-
-    const challenge = await CTF.findById(challengeId);
-    if (!challenge) {
-      throw new AppError(ErrorCatalog.CTF_NOT_FOUND);
     }
 
     let penalty = 0;

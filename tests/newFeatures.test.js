@@ -235,4 +235,89 @@ describe('New Features & Manual Finish Integration Tests', () => {
     // Clean up
     await CTF.deleteOne({ _id: ctfReset._id });
   });
+
+  it('should restrict challenge details and submit/hints APIs before starting the CTF', async () => {
+    // Create new challenge to test pre-start restrictions
+    const ctfRestrict = new CTF({
+      title: 'Restricted Challenge ' + Date.now(),
+      shortDescription: 'short description text',
+      longDescription: 'long instructions rules',
+      difficulty: 'medium',
+      stars: 3,
+      category: 'Web',
+      author: testAdmin._id,
+      status: 'active',
+      timerMinutes: 45,
+      flags: [{ flag: 'FLAG{test}', points: 100 }],
+      questions: [
+        { title: 'Q1', description: 'd', answer: 'a', hint: 'h' },
+        { title: 'Q2', description: 'd', answer: 'a', hint: 'h' },
+        { title: 'Q3', description: 'd', answer: 'a', hint: 'h' },
+        { title: 'Q4', description: 'd', answer: 'a', hint: 'h' },
+        { title: 'Q5', description: 'd', answer: 'a', hint: 'h' }
+      ]
+    });
+    await ctfRestrict.save();
+
+    // 1. Get challenge details before starting
+    const detailsRes = await request(server)
+      .get(`/api/v1/ctfs/${ctfRestrict._id}`)
+      .set('Authorization', `Bearer ${userToken}`)
+      .expect(200);
+
+    assert.strictEqual(detailsRes.body.success, true);
+    assert.strictEqual(detailsRes.body.data.hasActiveSession, false);
+    
+    // Check that permitted metadata is present
+    const cObj = detailsRes.body.data.challenge;
+    assert.ok(cObj);
+    assert.strictEqual(cObj.title, ctfRestrict.title);
+    assert.strictEqual(cObj.shortDescription, ctfRestrict.shortDescription);
+    assert.strictEqual(cObj.longDescription, ctfRestrict.longDescription);
+    assert.strictEqual(cObj.timerMinutes, ctfRestrict.timerMinutes);
+    assert.strictEqual(cObj.participantCount, 0);
+    assert.ok(cObj.startTime);
+
+    // Check that restricted challenge data is completely missing/undefined
+    assert.strictEqual(cObj.difficulty, undefined);
+    assert.strictEqual(cObj.stars, undefined);
+    assert.strictEqual(cObj.category, undefined);
+    assert.strictEqual(cObj.questionsCount, undefined);
+    assert.strictEqual(cObj.flagsCount, undefined);
+    assert.strictEqual(cObj.flags, undefined);
+    assert.strictEqual(cObj.questions, undefined);
+    assert.strictEqual(cObj.attachments, undefined);
+
+    // 2. Try to submit answer before starting (should fail with 403)
+    const submitAnsRes = await request(server)
+      .post(`/api/v1/ctfs/${ctfRestrict._id}/questions/60f72365a12f345678901234/submit`)
+      .set('Authorization', `Bearer ${userToken}`)
+      .send({ answer: 'test' })
+      .expect(403);
+
+    assert.strictEqual(submitAnsRes.body.success, false);
+    assert.strictEqual(submitAnsRes.body.message, "You must start the CTF before accessing challenges.");
+
+    // 3. Try to submit flag before starting (should fail with 403)
+    const submitFlagRes = await request(server)
+      .post(`/api/v1/ctfs/${ctfRestrict._id}/flags/0/submit`)
+      .set('Authorization', `Bearer ${userToken}`)
+      .send({ flag: 'test' })
+      .expect(403);
+
+    assert.strictEqual(submitFlagRes.body.success, false);
+    assert.strictEqual(submitFlagRes.body.message, "You must start the CTF before accessing challenges.");
+
+    // 4. Try to unlock question hint before starting (should fail with 403)
+    const unlockHintRes = await request(server)
+      .post(`/api/v1/ctfs/${ctfRestrict._id}/questions/60f72365a12f345678901234/hints/unlock`)
+      .set('Authorization', `Bearer ${userToken}`)
+      .expect(403);
+
+    assert.strictEqual(unlockHintRes.body.success, false);
+    assert.strictEqual(unlockHintRes.body.message, "You must start the CTF before accessing challenges.");
+
+    // 5. Clean up
+    await CTF.deleteOne({ _id: ctfRestrict._id });
+  });
 });
