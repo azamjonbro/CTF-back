@@ -78,8 +78,10 @@ app.use('/api/v1/admin', adminRoutes);
 
 // Custom API Updates Mount (Requirement 8)
 app.post('/api/v1/hint/open', authenticate, openHint);
+app.post('/api/v1/hints/open', authenticate, openHint);
 app.post('/api/v1/challenge/finish', authenticate, requireRole(['admin']), manuallyFinishChallenge);
 app.post('/api/v1/hackathon/finish', authenticate, requireRole(['admin']), manuallyFinishHackathon);
+app.post('/api/v1/hackathons/finish', authenticate, requireRole(['admin']), manuallyFinishHackathon);
 app.get('/api/v1/leaderboard', (req, res, next) => {
   const authHeader = req.headers.authorization;
   if (authHeader && authHeader.startsWith('Bearer ')) {

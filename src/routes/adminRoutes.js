@@ -1,5 +1,5 @@
 import express from 'express';
-import { getDashboardStats, createHackathon, manageRoles, getAuditLogs, getHackathonStats, editHackathon, deleteHackathon, getResetInfo, performReset } from '../controllers/adminController.js';
+import { getDashboardStats, createHackathon, manageRoles, getAuditLogs, getHackathonStats, editHackathon, deleteHackathon, getResetInfo, performReset, manuallyFinishChallenge } from '../controllers/adminController.js';
 import { authenticate, requireRole } from '../middlewares/auth.js';
 import { validateRequest } from '../middlewares/validation.js';
 import { hackathonCreateSchema, hackathonUpdateSchema, manageRolesSchema } from '../utils/validators.js';
@@ -18,5 +18,8 @@ router.get('/logs', getAuditLogs);
 router.get('/hackathons/:hackathonId/stats', getHackathonStats);
 router.get('/reset/info', getResetInfo);
 router.post('/reset', performReset);
+
+// Standard API route for force finishing challenges
+router.post('/ctfs/:ctfId/finish', manuallyFinishChallenge);
 
 export default router;

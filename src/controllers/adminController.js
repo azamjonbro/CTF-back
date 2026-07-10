@@ -432,7 +432,7 @@ export const deleteHackathon = async (req, res, next) => {
 
 export const manuallyFinishChallenge = async (req, res, next) => {
   try {
-    const { challengeId } = req.body;
+    const challengeId = req.params.ctfId || req.body.challengeId;
     if (!challengeId) {
       throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'challengeId is required');
     }

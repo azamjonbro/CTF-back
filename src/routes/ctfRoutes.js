@@ -21,6 +21,13 @@ router.post('/:challengeId/hint/unlock', authenticate, requireTeam, unlockChalle
 router.post('/:challengeId/finish', authenticate, requireTeam, finishChallenge);
 router.post('/:challengeId/finish-early', authenticate, requireTeam, finishChallengeEarly);
 
+// Plural Standard API routes
+router.post('/:challengeId/questions/:questionId/hints/unlock', authenticate, requireTeam, unlockQuestionHint);
+router.post('/:challengeId/questions/:questionId/flags/:flagId/hints/unlock', authenticate, requireTeam, (req, res, next) => {
+  req.params.flagIndex = req.params.flagId;
+  return unlockFlagHint(req, res, next);
+});
+
 // STAFF ROUTES (Challenge Management)
 router.post('/', authenticate, requireRole(['admin', 'staff']), validateRequest(ctfCreateSchema), createChallenge);
 router.put('/:challengeId', authenticate, requireRole(['admin', 'staff']), editChallenge);
