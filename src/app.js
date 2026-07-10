@@ -48,7 +48,7 @@ app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" }
 }));
 app.use(cors({
-  origin: '*', // Restrict to front & admin URLs in production env
+  origin: true, // Dynamically reflect request origin to support credentials: true
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   credentials: true
 }));
