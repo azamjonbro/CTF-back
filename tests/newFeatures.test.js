@@ -405,7 +405,7 @@ describe('New Features & Manual Finish Integration Tests', () => {
     const startHackathonRes = await request(server)
       .post(`/api/v1/ctfs/${hackathonCtf._id}/session`)
       .set('Authorization', `Bearer ${standaloneToken}`)
-      .expect(400); // Bad request / forbidden because user is not in a team
+      .expect(403); // Forbidden because user is not in a team
 
     assert.strictEqual(startHackathonRes.body.success, false);
 
