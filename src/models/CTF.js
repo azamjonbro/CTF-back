@@ -3,8 +3,11 @@ import mongoose from 'mongoose';
 const questionSchema = new mongoose.Schema({
   title: { type: String, required: true, trim: true },
   description: { type: String, default: '' },
-  answer: { type: String, required: true }, // bcrypt hashed
-  points: { type: Number, required: true, default: 10, min: 10 },
+  type: { type: String, default: 'text' },
+  options: { type: [String], default: [] },
+  correctAnswer: { type: String },
+  answer: { type: String }, // for backward compatibility
+  points: { type: Number, required: true, default: 10, min: 0 },
   hint: { type: String, default: '' }
 });
 
@@ -89,13 +92,7 @@ const ctfSchema = new mongoose.Schema({
   },
   questions: {
     type: [questionSchema],
-    required: true,
-    validate: {
-      validator: function (val) {
-        return val && val.length >= 5 && val.length <= 10;
-      },
-      message: 'A CTF challenge must contain between 5 and 10 questions.'
-    }
+    default: []
   }
 }, {
   timestamps: true

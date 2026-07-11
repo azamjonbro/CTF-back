@@ -31,9 +31,11 @@ export const teamInviteSchema = Joi.object({
 const questionSchema = Joi.object({
   title: Joi.string().required(),
   description: Joi.string().allow('').optional().default(''),
-  points: Joi.number().integer().min(10).default(10).optional(),
-  answer: Joi.string().required(),
-  hint: Joi.string().allow('').optional()
+  type: Joi.string().allow('').optional().default('text'),
+  options: Joi.array().items(Joi.string()).optional().default([]),
+  correctAnswer: Joi.string().required(),
+  points: Joi.number().integer().min(0).default(10).optional(),
+  hint: Joi.string().allow('').optional().default('')
 });
 
 export const ctfCreateSchema = Joi.object({
@@ -54,7 +56,7 @@ export const ctfCreateSchema = Joi.object({
       points: Joi.number().integer().min(0).default(100).optional()
     })
   ).min(1).max(3).required(),
-  questions: Joi.array().items(questionSchema).min(5).max(10).required()
+  questions: Joi.array().items(questionSchema).optional().default([])
 });
 
 export const hackathonCreateSchema = Joi.object({
