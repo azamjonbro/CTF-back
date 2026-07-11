@@ -8,6 +8,7 @@ import Hackathon from '../src/models/Hackathon.js';
 import ChallengeSession from '../src/models/ChallengeSession.js';
 import TeamChallenge from '../src/models/TeamChallenge.js';
 import { generateAccessToken } from '../src/utils/token.js';
+import { LeaderboardService } from '../src/services/leaderboardService.js';
 import bcrypt from 'bcryptjs';
 
 describe('New Features & Manual Finish Integration Tests', () => {
