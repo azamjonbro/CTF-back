@@ -415,4 +415,106 @@ describe('New Features & Manual Finish Integration Tests', () => {
     await CTF.deleteOne({ _id: hackathonCtf._id });
     await Hackathon.deleteOne({ _id: hackathon._id });
   });
+
+  it('should verify optional questions, multiple choice, and deduplicated scoring logic', async () => {
+    // 1. Verify CTF with 0 questions is allowed
+    const ctfEmpty = new CTF({
+      title: 'Empty Questions Challenge ' + Date.now(),
+      difficulty: 'easy',
+      stars: 1,
+      category: 'Misc',
+      author: testAdmin._id,
+      status: 'active',
+      timerMinutes: 10,
+      flags: [{ flag: 'FLAG{empty}', points: 100 }],
+      questions: []
+    });
+    await ctfEmpty.save();
+    assert.strictEqual(ctfEmpty.questions.length, 0);
+
+    // 2. Verify CTF with multiple-choice questions works
+    const salt = await bcrypt.genSalt(10);
+    const ctfMc = new CTF({
+      title: 'MC Challenge ' + Date.now(),
+      difficulty: 'easy',
+      stars: 1,
+      category: 'Misc',
+      author: testAdmin._id,
+      status: 'active',
+      timerMinutes: 10,
+      flags: [{ flag: 'FLAG{mc}', points: 100 }],
+      questions: [
+        {
+          title: 'MC Q1',
+          description: 'Pick choice',
+          type: 'multiple-choice',
+          options: ['Option A', 'Option B', 'Option C'],
+          correctAnswer: await bcrypt.hash('Option B', salt),
+          points: 15
+        }
+      ]
+    });
+    await ctfMc.save();
+
+    // 3. Start practice session and verify type/options are returned
+    await request(server)
+      .post(`/api/v1/ctfs/${ctfMc._id}/session`)
+      .set('Authorization', `Bearer ${userToken}`)
+      .expect(200);
+
+    const details = await request(server)
+      .get(`/api/v1/ctfs/${ctfMc._id}`)
+      .set('Authorization', `Bearer ${userToken}`)
+      .expect(200);
+
+    const qProj = details.body.data.questions[0];
+    assert.strictEqual(qProj.type, 'multiple-choice');
+    assert.deepStrictEqual(qProj.options, ['Option A', 'Option B', 'Option C']);
+    assert.strictEqual(qProj.points, 15);
+
+    // 4. Solve question in practice session
+    const solveMcRes = await request(server)
+      .post(`/api/v1/ctfs/${ctfMc._id}/questions/${qProj.id}/submit`)
+      .set('Authorization', `Bearer ${userToken}`)
+      .send({ answer: 'Option B' })
+      .expect(200);
+    assert.strictEqual(solveMcRes.body.data.pointsAwarded, 15);
+
+    // 5. Verify user profile displays score = 15
+    const profileRes = await request(server)
+      .get('/api/v1/users/profile')
+      .set('Authorization', `Bearer ${userToken}`)
+      .expect(200);
+    assert.strictEqual(profileRes.body.data.points, 15);
+
+    // 6. Simulate duplicate solve: Create a team session for same challenge and solve Q1 again
+    const teamSession = new TeamChallenge({
+      teamId: testTeam._id,
+      challengeId: ctfMc._id,
+      expiresAt: new Date(Date.now() + 600000),
+      solvedQuestions: [
+        {
+          questionId: qProj.id,
+          pointsAwarded: 15,
+          solvedAt: new Date()
+        }
+      ]
+    });
+    await teamSession.save();
+
+    // Recalculate rankings
+    await LeaderboardService.recalculateUserRankings();
+
+    // 7. Verify user profile score is still 15 (deduplicated) rather than 30!
+    const profileDeduplicatedRes = await request(server)
+      .get('/api/v1/users/profile')
+      .set('Authorization', `Bearer ${userToken}`)
+      .expect(200);
+    assert.strictEqual(profileDeduplicatedRes.body.data.points, 15);
+
+    // Clean up
+    await CTF.deleteOne({ _id: ctfEmpty._id });
+    await CTF.deleteOne({ _id: ctfMc._id });
+    await TeamChallenge.deleteOne({ _id: teamSession._id });
+  });
 });
