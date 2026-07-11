@@ -28,15 +28,17 @@ const hashFlags = async (flags) => {
 const hashQuestions = async (questions) => {
   const processed = [];
   for (const q of questions) {
-    let answerValue = q.answer;
+    let answerValue = q.correctAnswer || q.answer;
     if (!isBcryptHash(answerValue)) {
       const salt = await bcrypt.genSalt(10);
       answerValue = await bcrypt.hash(answerValue, salt);
     }
     processed.push({
       title: q.title,
-      description: q.description,
-      answer: answerValue,
+      description: q.description || '',
+      type: q.type || 'text',
+      options: q.options || [],
+      correctAnswer: answerValue,
       points: q.points !== undefined ? q.points : 10,
       hint: q.hint || ''
     });
