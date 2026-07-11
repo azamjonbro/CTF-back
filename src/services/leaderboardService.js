@@ -31,24 +31,53 @@ export class LeaderboardService {
       teamSessions = await TeamChallenge.find({ teamId: team._id });
     }
 
-    let solvedFlagsCount = 0;
-    let solvedQuestionsCount = 0;
-    let earnedFlagPoints = 0;
-    let earnedQuestionPoints = 0;
+    const uniqueSolvedQuestions = new Map(); // questionId -> pointsAwarded
+    const uniqueSolvedFlags = new Map(); // `${challengeId}_${flagIndex}` -> pointsAwarded
 
     sessions.forEach(s => {
-      solvedFlagsCount += s.solvedFlags.length;
-      solvedQuestionsCount += s.solvedQuestions.length;
-      earnedFlagPoints += s.solvedFlags.reduce((sum, sf) => sum + (sf.pointsAwarded || 0), 0);
-      earnedQuestionPoints += s.solvedQuestions.reduce((sum, sq) => sum + (sq.pointsAwarded || 0), 0);
+      if (s.solvedQuestions) {
+        s.solvedQuestions.forEach(sq => {
+          const qId = sq.questionId.toString();
+          if (!uniqueSolvedQuestions.has(qId) || (sq.pointsAwarded || 0) > uniqueSolvedQuestions.get(qId)) {
+            uniqueSolvedQuestions.set(qId, sq.pointsAwarded || 0);
+          }
+        });
+      }
+      if (s.solvedFlags) {
+        s.solvedFlags.forEach(sf => {
+          const fKey = `${s.challengeId.toString()}_${sf.flagIndex}`;
+          if (!uniqueSolvedFlags.has(fKey) || (sf.pointsAwarded || 0) > uniqueSolvedFlags.get(fKey)) {
+            uniqueSolvedFlags.set(fKey, sf.pointsAwarded || 0);
+          }
+        });
+      }
     });
 
     teamSessions.forEach(ts => {
-      solvedFlagsCount += ts.solvedFlags.length;
-      solvedQuestionsCount += ts.solvedQuestions.length;
-      earnedFlagPoints += ts.solvedFlags.reduce((sum, sf) => sum + (sf.pointsAwarded || 0), 0);
-      earnedQuestionPoints += ts.solvedQuestions.reduce((sum, sq) => sum + (sq.pointsAwarded || 0), 0);
+      if (ts.solvedQuestions) {
+        ts.solvedQuestions.forEach(sq => {
+          const qId = sq.questionId.toString();
+          if (!uniqueSolvedQuestions.has(qId) || (sq.pointsAwarded || 0) > uniqueSolvedQuestions.get(qId)) {
+            uniqueSolvedQuestions.set(qId, sq.pointsAwarded || 0);
+          }
+        });
+      }
+      if (ts.solvedFlags) {
+        ts.solvedFlags.forEach(sf => {
+          const fKey = `${ts.challengeId.toString()}_${sf.flagIndex}`;
+          if (!uniqueSolvedFlags.has(fKey) || (sf.pointsAwarded || 0) > uniqueSolvedFlags.get(fKey)) {
+            uniqueSolvedFlags.set(fKey, sf.pointsAwarded || 0);
+          }
+        });
+      }
     });
+
+    let solvedQuestionsCount = uniqueSolvedQuestions.size;
+    let solvedFlagsCount = uniqueSolvedFlags.size;
+    let earnedQuestionPoints = 0;
+    uniqueSolvedQuestions.forEach(p => { earnedQuestionPoints += p; });
+    let earnedFlagPoints = 0;
+    uniqueSolvedFlags.forEach(p => { earnedFlagPoints += p; });
 
     const totalScore = earnedFlagPoints + earnedQuestionPoints;
     const totalSolved = solvedFlagsCount + solvedQuestionsCount;
@@ -66,17 +95,34 @@ export class LeaderboardService {
   static async calculateTeamStatsFromDb(teamId) {
     const teamSessions = await TeamChallenge.find({ teamId });
 
-    let solvedFlagsCount = 0;
-    let solvedQuestionsCount = 0;
-    let earnedFlagPoints = 0;
-    let earnedQuestionPoints = 0;
+    const uniqueSolvedQuestions = new Map();
+    const uniqueSolvedFlags = new Map();
 
     teamSessions.forEach(ts => {
-      solvedFlagsCount += ts.solvedFlags.length;
-      solvedQuestionsCount += ts.solvedQuestions.length;
-      earnedFlagPoints += ts.solvedFlags.reduce((sum, sf) => sum + (sf.pointsAwarded || 0), 0);
-      earnedQuestionPoints += ts.solvedQuestions.reduce((sum, sq) => sum + (sq.pointsAwarded || 0), 0);
+      if (ts.solvedQuestions) {
+        ts.solvedQuestions.forEach(sq => {
+          const qId = sq.questionId.toString();
+          if (!uniqueSolvedQuestions.has(qId) || (sq.pointsAwarded || 0) > uniqueSolvedQuestions.get(qId)) {
+            uniqueSolvedQuestions.set(qId, sq.pointsAwarded || 0);
+          }
+        });
+      }
+      if (ts.solvedFlags) {
+        ts.solvedFlags.forEach(sf => {
+          const fKey = `${ts.challengeId.toString()}_${sf.flagIndex}`;
+          if (!uniqueSolvedFlags.has(fKey) || (sf.pointsAwarded || 0) > uniqueSolvedFlags.get(fKey)) {
+            uniqueSolvedFlags.set(fKey, sf.pointsAwarded || 0);
+          }
+        });
+      }
     });
+
+    let solvedQuestionsCount = uniqueSolvedQuestions.size;
+    let solvedFlagsCount = uniqueSolvedFlags.size;
+    let earnedQuestionPoints = 0;
+    uniqueSolvedQuestions.forEach(p => { earnedQuestionPoints += p; });
+    let earnedFlagPoints = 0;
+    uniqueSolvedFlags.forEach(p => { earnedFlagPoints += p; });
 
     const totalScore = earnedFlagPoints + earnedQuestionPoints;
     const totalSolved = solvedFlagsCount + solvedQuestionsCount;
@@ -102,7 +148,10 @@ export class LeaderboardService {
             totalScore: stats.totalScore,
             solvedFlagsCount: stats.solvedFlagsCount,
             solvedQuestionsCount: stats.solvedQuestionsCount,
-            totalSolved: stats.totalSolved
+            totalSolved: stats.totalSolved,
+            'statistics.pointsEarned': stats.totalScore,
+            'statistics.totalSolved': stats.totalSolved,
+            'statistics.starsEarned': u.stars
           }
         }
       );

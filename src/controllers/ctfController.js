@@ -212,6 +212,8 @@ export const getChallengeDetails = async (req, res, next) => {
         id: q._id,
         title: q.title,
         description: q.description,
+        type: q.type || 'text',
+        options: q.options || [],
         points: q.points !== undefined ? q.points : 10,
         hasHint: !!q.hint,
         hintUnlocked: isUnlocked,
@@ -374,6 +376,8 @@ export const startChallengeSession = async (req, res, next) => {
         id: q._id,
         title: q.title,
         description: q.description,
+        type: q.type || 'text',
+        options: q.options || [],
         points: q.points !== undefined ? q.points : 10,
         hasHint: !!q.hint,
         hintUnlocked: false,
@@ -834,7 +838,7 @@ export const submitQuestionAnswer = async (req, res, next) => {
     }
 
     // Verify answer (bcrypt comparison)
-    const isMatch = await bcrypt.compare(answer, question.answer);
+    const isMatch = await bcrypt.compare(answer, question.correctAnswer || question.answer);
     if (!isMatch) {
       session.questionAttempts[qaIndex].failedAttempts += 1;
       session.failedAttempts = (session.failedAttempts || 0) + 1;
@@ -1149,6 +1153,12 @@ export const submitChallengeFlag = async (req, res, next) => {
           'statistics.pointsEarned': flagPointsAwarded
         }
       });
+    }
+
+    await LeaderboardService.recalculateUserRankings();
+    if (mode === 'hackathon') {
+      await LeaderboardService.recalculateTeamRankings();
+      emitToGlobal('leaderboard:refresh', {});
     }
 
     // Check if all flags are solved

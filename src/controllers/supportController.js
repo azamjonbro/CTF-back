@@ -4,36 +4,32 @@ import { AppError, ErrorCatalog } from '../utils/errors.js';
 import { scanForViruses } from '../middlewares/upload.js';
 import bcrypt from 'bcryptjs';
 
+const isBcryptHash = (str) => typeof str === 'string' && /^\$2[ayb]\$[0-9]{2}\$[./A-Za-z0-9]{53}$/.test(str);
+
 export const addQuestionToChallenge = async (req, res, next) => {
   try {
     const { challengeId } = req.params;
-    const { title, description, score, attachments, flags, hints, type } = req.body;
+    const { title, description, points, correctAnswer, hint, type, options } = req.body;
 
     const challenge = await CTF.findById(challengeId);
     if (!challenge) {
       throw new AppError(ErrorCatalog.CTF_NOT_FOUND);
     }
 
-    if (challenge.questions.length >= 10) {
-      throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'A challenge cannot contain more than 10 questions.');
-    }
-
-    // Encrypt the flags
-    const hashedFlags = [];
-    for (const flag of flags) {
+    let answerValue = correctAnswer;
+    if (!isBcryptHash(answerValue)) {
       const salt = await bcrypt.genSalt(10);
-      const hashed = await bcrypt.hash(flag, salt);
-      hashedFlags.push(hashed);
+      answerValue = await bcrypt.hash(answerValue, salt);
     }
 
     challenge.questions.push({
       title,
       description,
-      score,
-      attachments,
-      flags: hashedFlags,
-      hints,
-      type
+      correctAnswer: answerValue,
+      points: points !== undefined ? points : 10,
+      hint: hint || '',
+      type: type || 'text',
+      options: options || []
     });
 
     await challenge.save();
