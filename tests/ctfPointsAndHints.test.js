@@ -77,8 +77,8 @@ describe('CTF Points, Penalties, and Task Count Integration Tests', () => {
   });
 
   it('should test correct defaults and hint unlock functionality', async () => {
-    // 1. Question points should default to 10, CTF points should default to 100
-    assert.strictEqual(testCtf.points, 100);
+    // 1. Question points should default to 10, CTF points should default to 150 (flagPoints 100 + questionPoints 50)
+    assert.strictEqual(testCtf.points, 150);
     assert.strictEqual(testCtf.questions[0].points, 10);
 
     // 2. Start challenge session
@@ -142,9 +142,9 @@ describe('CTF Points, Penalties, and Task Count Integration Tests', () => {
 
     // Check user stats after completion:
     // - totalSolved should be exactly 3 (2 questions + 1 flag)
-    // - points should include Q1 (6) + Q2 (8) + Flag (50) = 64 points
+    // - points should include Q1 (6) + Q2 (8) + Flag (100) = 114 points
     const userFinal = await User.findById(testUser._id);
     assert.strictEqual(userFinal.totalSolved, 3);
-    assert.strictEqual(userFinal.points, 64);
+    assert.strictEqual(userFinal.points, 114);
   });
 });

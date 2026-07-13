@@ -205,6 +205,12 @@ export const getChallengeDetails = async (req, res, next) => {
       await session.save();
     }
 
+    const qPointsTotal = challenge.questionPoints !== undefined ? challenge.questionPoints : challenge.questions.reduce((sum, q) => sum + (q.points !== undefined ? q.points : 10), 0);
+    const qPointsPerItem = challenge.questions.length > 0 ? Math.round(qPointsTotal / challenge.questions.length) : 10;
+
+    const fPointsTotal = challenge.flagPoints !== undefined ? challenge.flagPoints : (challenge.points - qPointsTotal > 0 ? challenge.points - qPointsTotal : 100);
+    const fPointsPerItem = challenge.flags.length > 0 ? Math.round(fPointsTotal / challenge.flags.length) : 100;
+
     // Prepare questions projection (omit answers for security!)
     const questionsWithoutAnswers = challenge.questions.map(q => {
       const isUnlocked = session.hintsUnlocked.some(hu => hu.questionId.toString() === q._id.toString());
@@ -214,7 +220,7 @@ export const getChallengeDetails = async (req, res, next) => {
         description: q.description,
         type: q.type || 'text',
         options: q.options || [],
-        points: q.points !== undefined ? q.points : 10,
+        points: qPointsPerItem,
         hasHint: !!q.hint,
         hintUnlocked: isUnlocked,
         hint: isUnlocked ? (q.hint || '') : '',
@@ -228,7 +234,7 @@ export const getChallengeDetails = async (req, res, next) => {
       return {
         title: f.title || `Flag #${i + 1}`,
         description: f.description || '',
-        points: Math.round(challenge.points / challenge.flags.length),
+        points: fPointsPerItem,
         attachment: f.attachment || '',
         hasHint: !!f.hint,
         hintUnlocked: isHintUnlocked,
@@ -370,6 +376,9 @@ export const startChallengeSession = async (req, res, next) => {
       }
     }
 
+    const qPointsTotal = challenge.questionPoints !== undefined ? challenge.questionPoints : challenge.questions.reduce((sum, q) => sum + (q.points !== undefined ? q.points : 10), 0);
+    const qPointsPerItem = challenge.questions.length > 0 ? Math.round(qPointsTotal / challenge.questions.length) : 10;
+
     // Prepare questions projection
     const questionsWithoutAnswers = challenge.questions.map(q => {
       return {
@@ -378,7 +387,7 @@ export const startChallengeSession = async (req, res, next) => {
         description: q.description,
         type: q.type || 'text',
         options: q.options || [],
-        points: q.points !== undefined ? q.points : 10,
+        points: qPointsPerItem,
         hasHint: !!q.hint,
         hintUnlocked: false,
         hint: '',
@@ -857,7 +866,8 @@ export const submitQuestionAnswer = async (req, res, next) => {
     }
 
     // Calculate points to award
-    const questionPoints = question.points !== undefined ? question.points : 10;
+    const qPointsTotal = challenge.questionPoints !== undefined ? challenge.questionPoints : challenge.questions.reduce((sum, q) => sum + (q.points !== undefined ? q.points : 10), 0);
+    const questionPoints = challenge.questions.length > 0 ? Math.round(qPointsTotal / challenge.questions.length) : 10;
     const isHintUnlocked = session.hintsUnlocked && session.hintsUnlocked.some(hu => hu.questionId.toString() === questionId.toString());
     const scoreAwarded = isHintUnlocked ? Math.round(questionPoints * 0.8) : questionPoints;
 
@@ -1057,11 +1067,10 @@ export const submitChallengeFlag = async (req, res, next) => {
     }
     const targetFlagHash = typeof targetFlagObj === 'object' && targetFlagObj !== null ? targetFlagObj.flag : targetFlagObj;
     
-    // Dynamic score calculation: Each challenge awards only its own score value.
-    // So each flag awards a portion of the challenge's overall score after subtracting question points.
-    const sumQuestionsPoints = challenge.questions.reduce((sum, q) => sum + (q.points !== undefined ? q.points : 10), 0);
-    const flagsTotalPoints = Math.max(0, challenge.points - sumQuestionsPoints);
-    const flagPoints = Math.round(flagsTotalPoints / challenge.flags.length);
+    // Dynamic score calculation: flagPoints / flagCount
+    const qPointsTotal = challenge.questionPoints !== undefined ? challenge.questionPoints : challenge.questions.reduce((sum, q) => sum + (q.points !== undefined ? q.points : 10), 0);
+    const fPointsTotal = challenge.flagPoints !== undefined ? challenge.flagPoints : (challenge.points - qPointsTotal > 0 ? challenge.points - qPointsTotal : 100);
+    const flagPoints = challenge.flags.length > 0 ? Math.round(fPointsTotal / challenge.flags.length) : 100;
 
     const isMatch = await bcrypt.compare(flag, targetFlagHash);
     if (!isMatch) {

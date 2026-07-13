@@ -44,6 +44,14 @@ const ctfSchema = new mongoose.Schema({
     required: true,
     default: 100
   },
+  flagPoints: {
+    type: Number,
+    required: true
+  },
+  questionPoints: {
+    type: Number,
+    required: true
+  },
   category: {
     type: String,
     required: true,
@@ -96,6 +104,17 @@ const ctfSchema = new mongoose.Schema({
   }
 }, {
   timestamps: true
+});
+
+ctfSchema.pre('validate', function (next) {
+  if (this.flagPoints === undefined || this.flagPoints === null) {
+    this.flagPoints = (this.flags || []).reduce((sum, f) => sum + (f.points !== undefined ? Number(f.points) : 100), 0);
+  }
+  if (this.questionPoints === undefined || this.questionPoints === null) {
+    this.questionPoints = (this.questions || []).reduce((sum, q) => sum + (q.points !== undefined ? Number(q.points) : 10), 0);
+  }
+  this.points = this.flagPoints + this.questionPoints;
+  next();
 });
 
 // Compound indexes for challenges listings

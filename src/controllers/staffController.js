@@ -45,10 +45,9 @@ const hashQuestions = async (questions) => {
   }
   return processed;
 };
-
 export const createChallenge = async (req, res, next) => {
   try {
-    const { title, shortDescription, longDescription, difficulty, stars, points, category, questions, timerMinutes, image, attachments, flags, hint } = req.body;
+    const { title, shortDescription, longDescription, difficulty, stars, points, flagPoints, questionPoints, category, questions, timerMinutes, image, attachments, flags, hint } = req.body;
 
     const existing = await CTF.findOne({ title });
     if (existing) {
@@ -59,13 +58,21 @@ export const createChallenge = async (req, res, next) => {
     const securedFlags = await hashFlags(flags || []);
     const securedQuestions = await hashQuestions(questions || []);
 
+    const flagPointsCalculated = (flags || []).reduce((sum, f) => sum + (f.points !== undefined ? Number(f.points) : 100), 0);
+    const questionPointsCalculated = (questions || []).reduce((sum, q) => sum + (q.points !== undefined ? Number(q.points) : 10), 0);
+
+    const fPoints = flagPoints !== undefined ? Number(flagPoints) : flagPointsCalculated;
+    const qPoints = questionPoints !== undefined ? Number(questionPoints) : questionPointsCalculated;
+
     const newChallenge = new CTF({
       title,
       shortDescription,
       longDescription,
       difficulty,
       stars,
-      points: points !== undefined ? points : 100,
+      flagPoints: fPoints,
+      questionPoints: qPoints,
+      points: fPoints + qPoints,
       category,
       timerMinutes: timerMinutes || 60,
       image: image || '',
@@ -105,7 +112,7 @@ export const createChallenge = async (req, res, next) => {
 export const editChallenge = async (req, res, next) => {
   try {
     const { challengeId } = req.params;
-    const { title, shortDescription, longDescription, difficulty, stars, points, category, questions, status, timerMinutes, image, attachments, flags, hint } = req.body;
+    const { title, shortDescription, longDescription, difficulty, stars, points, flagPoints, questionPoints, category, questions, status, timerMinutes, image, attachments, flags, hint } = req.body;
 
     const challenge = await CTF.findById(challengeId);
     if (!challenge) {
@@ -124,7 +131,6 @@ export const editChallenge = async (req, res, next) => {
     if (longDescription) challenge.longDescription = longDescription;
     if (difficulty) challenge.difficulty = difficulty;
     if (stars) challenge.stars = stars;
-    if (points !== undefined) challenge.points = points;
     if (category) challenge.category = category;
     if (status) challenge.status = status;
     if (timerMinutes !== undefined) challenge.timerMinutes = timerMinutes;
@@ -139,6 +145,21 @@ export const editChallenge = async (req, res, next) => {
     if (questions) {
       challenge.questions = await hashQuestions(questions);
     }
+
+    // Recalculate flagPoints and questionPoints based on flags/questions updates
+    let currentFlagPoints = flagPoints !== undefined ? Number(flagPoints) : (challenge.flagPoints !== undefined ? challenge.flagPoints : challenge.points);
+    let currentQuestionPoints = questionPoints !== undefined ? Number(questionPoints) : (challenge.questionPoints !== undefined ? challenge.questionPoints : 0);
+
+    if (flags && flagPoints === undefined) {
+      currentFlagPoints = flags.reduce((sum, f) => sum + (f.points !== undefined ? Number(f.points) : 100), 0);
+    }
+    if (questions && questionPoints === undefined) {
+      currentQuestionPoints = questions.reduce((sum, q) => sum + (q.points !== undefined ? Number(q.points) : 10), 0);
+    }
+
+    challenge.flagPoints = currentFlagPoints !== undefined ? currentFlagPoints : 100;
+    challenge.questionPoints = currentQuestionPoints !== undefined ? currentQuestionPoints : 0;
+    challenge.points = challenge.flagPoints + challenge.questionPoints;
 
     await challenge.save();
 
