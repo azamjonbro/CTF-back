@@ -518,4 +518,91 @@ describe('New Features & Manual Finish Integration Tests', () => {
     await CTF.deleteOne({ _id: ctfMc._id });
     await TeamChallenge.deleteOne({ _id: teamSession._id });
   });
+
+  it('should retrieve detailed analytics for a challenge as admin', async () => {
+    // 1. Create a mock challenge
+    const ctf = new CTF({
+      title: 'Analytics Test Challenge ' + Date.now(),
+      difficulty: 'medium',
+      stars: 2,
+      category: 'Crypto',
+      author: testAdmin._id,
+      status: 'active',
+      timerMinutes: 30,
+      flags: [{ flag: 'FLAG{test_analytics}', points: 100 }],
+      questions: [
+        { title: 'Crypto Q1', description: 'desc', answer: 'ans', points: 20 }
+      ]
+    });
+    await ctf.save();
+
+    // 2. Create user session and team session
+    const userSession = new ChallengeSession({
+      userId: testUser._id,
+      challengeId: ctf._id,
+      expiresAt: new Date(Date.now() + 600000),
+      solvedQuestions: [
+        { questionId: ctf.questions[0]._id, pointsAwarded: 20, solvedAt: new Date() }
+      ],
+      questionAttempts: [
+        { questionId: ctf.questions[0]._id, failedAttempts: 2 }
+      ],
+      failedAttempts: 2,
+      status: 'active'
+    });
+    await userSession.save();
+
+    const teamSession = new TeamChallenge({
+      teamId: testTeam._id,
+      challengeId: ctf._id,
+      expiresAt: new Date(Date.now() + 600000),
+      solvedQuestions: [],
+      questionAttempts: [
+        { questionId: ctf.questions[0]._id, failedAttempts: 3 }
+      ],
+      failedAttempts: 3,
+      status: 'active'
+    });
+    await teamSession.save();
+
+    // 3. Request analytics as non-admin - should be forbidden (403)
+    await request(server)
+      .get(`/api/v1/admin/ctfs/${ctf._id}/analytics`)
+      .set('Authorization', `Bearer ${userToken}`)
+      .expect(403);
+
+    // 4. Request analytics as admin - should succeed (200)
+    const res = await request(server)
+      .get(`/api/v1/admin/ctfs/${ctf._id}/analytics`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .expect(200);
+
+    assert.strictEqual(res.body.success, true);
+    assert.strictEqual(res.body.data.challenge.title, ctf.title);
+    assert.strictEqual(res.body.data.questions.length, 1);
+    
+    // Check aggregated stats
+    const questionStats = res.body.data.questions[0].stats;
+    assert.strictEqual(questionStats.totalSolvedCount, 1); // 1 from user session, 0 from team
+    assert.strictEqual(questionStats.totalFailedAttemptsSum, 5); // 2 from user, 3 from team
+    assert.strictEqual(questionStats.individualSolvedCount, 1);
+    assert.strictEqual(questionStats.teamFailedAttemptsSum, 3);
+
+    // Check userStats details
+    assert.strictEqual(res.body.data.userStats.length, 1);
+    assert.strictEqual(res.body.data.userStats[0].username, testUser.username);
+    assert.strictEqual(res.body.data.userStats[0].questionsDetail[0].solved, true);
+    assert.strictEqual(res.body.data.userStats[0].questionsDetail[0].failedAttempts, 2);
+
+    // Check teamStats details
+    assert.strictEqual(res.body.data.teamStats.length, 1);
+    assert.strictEqual(res.body.data.teamStats[0].teamName, testTeam.name);
+    assert.strictEqual(res.body.data.teamStats[0].questionsDetail[0].solved, false);
+    assert.strictEqual(res.body.data.teamStats[0].questionsDetail[0].failedAttempts, 3);
+
+    // Clean up
+    await CTF.deleteOne({ _id: ctf._id });
+    await ChallengeSession.deleteOne({ _id: userSession._id });
+    await TeamChallenge.deleteOne({ _id: teamSession._id });
+  });
 });
