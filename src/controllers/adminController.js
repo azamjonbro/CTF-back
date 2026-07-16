@@ -1,4 +1,5 @@
 import User from '../models/User.js';
+import Question from '../models/Question.js';
 import Team from '../models/Team.js';
 import CTF from '../models/CTF.js';
 import Hackathon from '../models/Hackathon.js';
@@ -1032,3 +1033,77 @@ export const performReset = async (req, res, next) => {
     next(error);
   }
 };
+
+// Get Database Collections Count
+export const getDatabaseCounts = async (req, res, next) => {
+  try {
+    if (req.user.username !== 'superadmin') {
+      throw new AppError(ErrorCatalog.AUTH_FORBIDDEN, 'Only Super Admin can access this resource.');
+    }
+
+    const userCount = await User.countDocuments({});
+    const questionCount = await Question.countDocuments({});
+
+    res.status(200).json({
+      success: true,
+      data: {
+        users: userCount,
+        questions: questionCount
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Delete all documents in a collection
+export const deleteCollectionData = async (req, res, next) => {
+  try {
+    if (req.user.username !== 'superadmin') {
+      throw new AppError(ErrorCatalog.AUTH_FORBIDDEN, 'Only Super Admin can perform this action.');
+    }
+
+    const { collectionName } = req.body;
+
+    if (!['users', 'questions'].includes(collectionName)) {
+      throw new AppError(ErrorCatalog.SYSTEM_BAD_REQUEST, 'Invalid collection name');
+    }
+
+    if (collectionName === 'users') {
+      await User.deleteMany({});
+      
+      // Re-seed default superadmin user
+      const adminEmail = 'superadmin@ctf.com';
+      const adminUsername = 'superadmin';
+      const superadmin = new User({
+        username: adminUsername,
+        email: adminEmail,
+        passwordHash: 'SuperAdminSecurePassword2026!',
+        name: 'Super',
+        surname: 'Admin',
+        roles: ['admin']
+      });
+      await superadmin.save();
+    } else if (collectionName === 'questions') {
+      await Question.deleteMany({});
+    }
+
+    // Log admin activity
+    await AuditLog.create({
+      userId: req.user.userId,
+      action: `DELETE_ALL_${collectionName.toUpperCase()}`,
+      status: 'success',
+      details: { collection: collectionName },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent']
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `${collectionName === 'users' ? 'Users' : 'Questions'} data successfully permanently deleted.`
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
