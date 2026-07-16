@@ -288,9 +288,8 @@ export class LeaderboardService {
       if (currentUser) {
         surrounding.currentUserRank = currentUser.ranking;
         
-        // Find users directly above (ranks smaller than user ranking)
         surrounding.above = await User.find({ ranking: { $lt: currentUser.ranking, $gte: Math.max(1, currentUser.ranking - 3) } })
-          .sort({ ranking: -1 })
+          .sort({ ranking: 1 })
           .select('username points stars ranking profilePicture country solvedFlagsCount solvedQuestionsCount totalSolved finishTime');
 
         // Find users directly below (ranks greater than user ranking)
@@ -360,7 +359,7 @@ export class LeaderboardService {
         surrounding.currentTeamRank = currentTeam.ranking;
 
         const rawAbove = await Team.find({ ranking: { $lt: currentTeam.ranking, $gte: Math.max(1, currentTeam.ranking - 3) } })
-          .sort({ ranking: -1 })
+          .sort({ ranking: 1 })
           .select('name points stars ranking finishTime solvedFlagsCount solvedQuestionsCount totalSolved');
         
         surrounding.above = rawAbove.map(a => {
@@ -663,8 +662,7 @@ export class LeaderboardService {
       const currentIdx = sortedUsers.findIndex(u => u._id.toString() === userId.toString());
       if (currentIdx !== -1) {
         surrounding.currentUserRank = currentIdx + 1;
-        const aboveStart = Math.max(0, currentIdx - 3);
-        surrounding.above = sortedUsers.slice(aboveStart, currentIdx).reverse();
+        surrounding.above = sortedUsers.slice(aboveStart, currentIdx);
         surrounding.below = sortedUsers.slice(currentIdx + 1, currentIdx + 4);
       }
     }
@@ -767,8 +765,7 @@ export class LeaderboardService {
       const currentIdx = sortedTeams.findIndex(t => t._id.toString() === teamId.toString());
       if (currentIdx !== -1) {
         surrounding.currentTeamRank = currentIdx + 1;
-        const aboveStart = Math.max(0, currentIdx - 3);
-        surrounding.above = sortedTeams.slice(aboveStart, currentIdx).reverse();
+        surrounding.above = sortedTeams.slice(aboveStart, currentIdx);
         surrounding.below = sortedTeams.slice(currentIdx + 1, currentIdx + 4);
       }
     }
