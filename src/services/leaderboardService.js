@@ -661,7 +661,7 @@ export class LeaderboardService {
     if (userId) {
       const currentIdx = sortedUsers.findIndex(u => u._id.toString() === userId.toString());
       if (currentIdx !== -1) {
-        surrounding.currentUserRank = currentIdx + 1;
+        const aboveStart = Math.max(0, currentIdx - 3);
         surrounding.above = sortedUsers.slice(aboveStart, currentIdx);
         surrounding.below = sortedUsers.slice(currentIdx + 1, currentIdx + 4);
       }
@@ -765,6 +765,7 @@ export class LeaderboardService {
       const currentIdx = sortedTeams.findIndex(t => t._id.toString() === teamId.toString());
       if (currentIdx !== -1) {
         surrounding.currentTeamRank = currentIdx + 1;
+        const aboveStart = Math.max(0, currentIdx - 3);
         surrounding.above = sortedTeams.slice(aboveStart, currentIdx);
         surrounding.below = sortedTeams.slice(currentIdx + 1, currentIdx + 4);
       }
