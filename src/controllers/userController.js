@@ -335,7 +335,11 @@ export const getDashboardStats = async (req, res, next) => {
       'Reverse Engineering': 0,
       'Cryptography': 0,
       'Forensics': 0,
-      'PWN': 0
+      'PWN': 0,
+      'Network Security': 0,
+      'OSINT': 0,
+      'Privilege Escalation': 0,
+      'Active Directory': 0
     };
 
     solvedLogs.forEach(log => {
