@@ -270,7 +270,7 @@ export const getHackathonStats = async (req, res, next) => {
     .populate('teamId', 'name')
     .sort({ createdAt: -1 });
 
-    const challenges = await CTF.find({ _id: { $in: challengeIds } }).select('title questions');
+    const challenges = await CTF.find({ _id: { $in: challengeIds } }).select('title questions questionPoints flagPoints flags');
     const challengeMap = {};
     for (const c of challenges) {
       challengeMap[c._id.toString()] = {
@@ -301,6 +301,236 @@ export const getHackathonStats = async (req, res, next) => {
       };
     });
 
+    // 4. Calculate Extended Question Statistics
+    const teams = await Team.find({ hackathonsJoined: hackathonId }).populate('members');
+    
+    // Extract unique participants
+    const participants = [];
+    const participantMap = {};
+    for (const team of teams) {
+      for (const member of team.members) {
+        const uIdStr = member._id.toString();
+        if (!participantMap[uIdStr]) {
+          const fullName = `${member.name || ''} ${member.surname || ''}`.trim() || member.username;
+          const userObj = {
+            _id: member._id,
+            username: member.username,
+            fullName,
+            teamName: team.name,
+            teamId: team._id
+          };
+          participants.push(userObj);
+          participantMap[uIdStr] = userObj;
+        }
+      }
+    }
+
+    // Prepare questions list
+    const allQuestions = [];
+    for (const challenge of challenges) {
+      for (const question of challenge.questions) {
+        const qPointsTotal = challenge.questionPoints !== undefined ? challenge.questionPoints : challenge.questions.reduce((sum, q) => sum + (q.points !== undefined ? q.points : 10), 0);
+        const questionPoints = challenge.questions.length > 0 ? Math.round(qPointsTotal / challenge.questions.length) : 10;
+        
+        allQuestions.push({
+          _id: question._id,
+          title: question.title,
+          points: questionPoints,
+          challengeId: challenge._id,
+          challengeTitle: challenge.title
+        });
+      }
+    }
+
+    // Get question audit logs (both successes and failures)
+    const auditLogs = await AuditLog.find({
+      action: { $in: ['SUBMIT_QUESTION_SUCCESS', 'SUBMIT_QUESTION_FAILURE'] },
+      'details.challengeId': { $in: challengeIds }
+    }).sort({ createdAt: 1 });
+
+    const userQuestionLogs = {};
+    for (const log of auditLogs) {
+      if (!log.userId) continue;
+      const uIdStr = log.userId.toString();
+      const qIdStr = log.details?.questionId?.toString();
+      if (!qIdStr) continue;
+
+      if (!userQuestionLogs[uIdStr]) {
+        userQuestionLogs[uIdStr] = {};
+      }
+      if (!userQuestionLogs[uIdStr][qIdStr]) {
+        userQuestionLogs[uIdStr][qIdStr] = [];
+      }
+      userQuestionLogs[uIdStr][qIdStr].push(log);
+    }
+
+    // Get team challenge session start times (openedAt)
+    const teamChallenges = await TeamChallenge.find({
+      teamId: { $in: teams.map(t => t._id) },
+      challengeId: { $in: challengeIds }
+    });
+
+    const sessionOpenMap = {};
+    for (const tc of teamChallenges) {
+      const key = `${tc.teamId.toString()}_${tc.challengeId.toString()}`;
+      sessionOpenMap[key] = tc.openedAt;
+    }
+
+    const questionStats = [];
+    let totalCorrectAnswersCount = 0;
+    let totalWrongAnswersCount = 0;
+
+    for (const qInfo of allQuestions) {
+      const qIdStr = qInfo._id.toString();
+
+      let answeredCount = 0;
+      let correctCount = 0;
+      let wrongCount = 0;
+
+      let firstSolverLog = null;
+      let lastSolverLog = null;
+      let totalTimeSpentForAverage = 0;
+      let correctSolversForAverageCount = 0;
+
+      const userStatsList = [];
+
+      for (const participant of participants) {
+        const uIdStr = participant._id.toString();
+        const logs = (userQuestionLogs[uIdStr] && userQuestionLogs[uIdStr][qIdStr]) || [];
+
+        let status = 'Not Answered';
+        let score = 0;
+        let submittedAt = null;
+        let timeSpent = '—';
+        let attemptCount = logs.length;
+
+        if (attemptCount > 0) {
+          answeredCount++;
+          const successLog = logs.find(l => l.action === 'SUBMIT_QUESTION_SUCCESS');
+
+          if (successLog) {
+            status = 'Correct';
+            score = successLog.details?.scoreAwarded || qInfo.points;
+            submittedAt = successLog.createdAt;
+
+            const teamKey = `${participant.teamId.toString()}_${qInfo.challengeId.toString()}`;
+            const openedAt = sessionOpenMap[teamKey];
+            if (openedAt && submittedAt) {
+              const elapsedMs = submittedAt.getTime() - openedAt.getTime();
+              timeSpent = LeaderboardService.formatDuration(elapsedMs);
+              totalTimeSpentForAverage += elapsedMs;
+              correctSolversForAverageCount++;
+            }
+
+            correctCount++;
+
+            if (!firstSolverLog || successLog.createdAt < firstSolverLog.createdAt) {
+              firstSolverLog = successLog;
+            }
+            if (!lastSolverLog || successLog.createdAt > lastSolverLog.createdAt) {
+              lastSolverLog = successLog;
+            }
+          } else {
+            status = 'Wrong';
+            score = 0;
+            const lastFailLog = logs[logs.length - 1];
+            submittedAt = lastFailLog.createdAt;
+
+            const teamKey = `${participant.teamId.toString()}_${qInfo.challengeId.toString()}`;
+            const openedAt = sessionOpenMap[teamKey];
+            if (openedAt && submittedAt) {
+              const elapsedMs = submittedAt.getTime() - openedAt.getTime();
+              timeSpent = LeaderboardService.formatDuration(elapsedMs);
+            }
+
+            wrongCount++;
+          }
+
+          const correctSubmissions = logs.filter(l => l.action === 'SUBMIT_QUESTION_SUCCESS').length;
+          const wrongSubmissions = logs.filter(l => l.action === 'SUBMIT_QUESTION_FAILURE').length;
+          totalCorrectAnswersCount += correctSubmissions;
+          totalWrongAnswersCount += wrongSubmissions;
+        }
+
+        userStatsList.push({
+          username: participant.username,
+          fullName: participant.fullName,
+          attempt: attemptCount,
+          status,
+          score,
+          submittedAt: submittedAt ? submittedAt.toISOString() : null,
+          timeSpent
+        });
+      }
+
+      let averageTime = '—';
+      if (correctSolversForAverageCount > 0) {
+        const avgMs = Math.round(totalTimeSpentForAverage / correctSolversForAverageCount);
+        averageTime = LeaderboardService.formatDuration(avgMs);
+      }
+
+      const successRate = answeredCount > 0 ? Math.round((correctCount / answeredCount) * 100) : 0;
+
+      let firstSolver = '—';
+      if (firstSolverLog) {
+        const userObj = participantMap[firstSolverLog.userId.toString()];
+        firstSolver = userObj ? userObj.fullName : 'Unknown';
+      }
+
+      let lastSolver = '—';
+      if (lastSolverLog) {
+        const userObj = participantMap[lastSolverLog.userId.toString()];
+        lastSolver = userObj ? userObj.fullName : 'Unknown';
+      }
+
+      questionStats.push({
+        questionTitle: qInfo.title,
+        questionId: qInfo._id,
+        challengeTitle: qInfo.challengeTitle,
+        maxPoints: qInfo.points,
+        answeredCount,
+        correctCount,
+        wrongCount,
+        successRate,
+        averageTime,
+        firstSolver,
+        lastSolver,
+        userStats: userStatsList
+      });
+    }
+
+    let mostDifficult = '—';
+    let minCorrect = Infinity;
+    for (const q of questionStats) {
+      if (q.correctCount < minCorrect) {
+        minCorrect = q.correctCount;
+        mostDifficult = `${q.challengeTitle} - ${q.questionTitle}`;
+      }
+    }
+    if (minCorrect === Infinity) mostDifficult = '—';
+
+    let easiest = '—';
+    let maxCorrect = -1;
+    for (const q of questionStats) {
+      if (q.correctCount > maxCorrect) {
+        maxCorrect = q.correctCount;
+        easiest = `${q.challengeTitle} - ${q.questionTitle}`;
+      }
+    }
+    if (maxCorrect === -1) easiest = '—';
+
+    const dashboard = {
+      totalQuestions: allQuestions.length,
+      totalParticipants: participants.length,
+      totalCorrectAnswers: totalCorrectAnswersCount,
+      totalWrongAnswers: totalWrongAnswersCount,
+      overallSuccessRate: (totalCorrectAnswersCount + totalWrongAnswersCount) > 0
+        ? Math.round((totalCorrectAnswersCount / (totalCorrectAnswersCount + totalWrongAnswersCount)) * 100)
+        : 0,
+      mostDifficultQuestion: mostDifficult,
+      easiestQuestion: easiest
+    };
+
     res.status(200).json({
       success: true,
       data: {
@@ -313,7 +543,9 @@ export const getHackathonStats = async (req, res, next) => {
         },
         leaderboard,
         activeSessions: formattedSessions,
-        userSolves: formattedSolves
+        userSolves: formattedSolves,
+        dashboard,
+        questionStats
       }
     });
   } catch (error) {
