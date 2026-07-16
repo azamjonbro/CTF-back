@@ -1,5 +1,5 @@
 import express from 'express';
-import { getDashboardStats, createHackathon, manageRoles, getAuditLogs, getHackathonStats, editHackathon, deleteHackathon, getResetInfo, performReset, manuallyFinishChallenge, getDatabaseCounts, deleteCollectionData } from '../controllers/adminController.js';
+import { getDashboardStats, createHackathon, manageRoles, getAuditLogs, getHackathonStats, editHackathon, deleteHackathon, getResetInfo, performReset, manuallyFinishChallenge, getDatabaseCounts, deleteCollectionData, getChallengeAnalytics } from '../controllers/adminController.js';
 import { authenticate, requireRole } from '../middlewares/auth.js';
 import { validateRequest } from '../middlewares/validation.js';
 import { hackathonCreateSchema, hackathonUpdateSchema, manageRolesSchema } from '../utils/validators.js';
@@ -21,6 +21,7 @@ router.post('/reset', performReset);
 
 // Standard API route for force finishing challenges
 router.post('/ctfs/:ctfId/finish', manuallyFinishChallenge);
+router.get('/ctfs/:challengeId/analytics', getChallengeAnalytics);
 
 // Database Management (Super Admin only checks enforced within controllers)
 router.get('/db/counts', getDatabaseCounts);

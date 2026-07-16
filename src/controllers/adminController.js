@@ -1107,3 +1107,166 @@ export const deleteCollectionData = async (req, res, next) => {
   }
 };
 
+// Get detailed analytics for a single challenge (CTF)
+export const getChallengeAnalytics = async (req, res, next) => {
+  try {
+    const { challengeId } = req.params;
+
+    const challenge = await CTF.findById(challengeId);
+    if (!challenge) {
+      throw new AppError(ErrorCatalog.CTF_NOT_FOUND, 'Challenge not found');
+    }
+
+    // Fetch individual sessions (ChallengeSession) and populate users
+    const individualSessions = await ChallengeSession.find({ challengeId })
+      .populate('userId', 'username email name surname')
+      .lean();
+
+    // Fetch team sessions (TeamChallenge) and populate teams
+    const teamSessions = await TeamChallenge.find({ challengeId })
+      .populate('teamId', 'name')
+      .lean();
+
+    // Prepare questions list from challenge
+    const questions = (challenge.questions || []).map(q => {
+      const qIdStr = q._id.toString();
+
+      // Count solves and attempts from individual sessions
+      let individualSolvedCount = 0;
+      let individualAttemptedCount = 0;
+      let individualFailedAttemptsSum = 0;
+
+      individualSessions.forEach(session => {
+        const isSolved = (session.solvedQuestions || []).some(sq => sq.questionId.toString() === qIdStr);
+        const attemptObj = (session.questionAttempts || []).find(qa => qa.questionId.toString() === qIdStr);
+        const failedAttempts = attemptObj ? attemptObj.failedAttempts : 0;
+
+        if (isSolved) {
+          individualSolvedCount++;
+        }
+        if (failedAttempts > 0 || isSolved) {
+          individualAttemptedCount++;
+        }
+        individualFailedAttemptsSum += failedAttempts;
+      });
+
+      // Count solves and attempts from team sessions
+      let teamSolvedCount = 0;
+      let teamAttemptedCount = 0;
+      let teamFailedAttemptsSum = 0;
+
+      teamSessions.forEach(session => {
+        const isSolved = (session.solvedQuestions || []).some(sq => sq.questionId.toString() === qIdStr);
+        const attemptObj = (session.questionAttempts || []).find(qa => qa.questionId.toString() === qIdStr);
+        const failedAttempts = attemptObj ? attemptObj.failedAttempts : 0;
+
+        if (isSolved) {
+          teamSolvedCount++;
+        }
+        if (failedAttempts > 0 || isSolved) {
+          teamAttemptedCount++;
+        }
+        teamFailedAttemptsSum += failedAttempts;
+      });
+
+      return {
+        _id: q._id,
+        title: q.title,
+        points: q.points,
+        type: q.type,
+        correctAnswer: q.correctAnswer || q.answer,
+        stats: {
+          individualSolvedCount,
+          individualAttemptedCount,
+          individualFailedAttemptsSum,
+          teamSolvedCount,
+          teamAttemptedCount,
+          teamFailedAttemptsSum,
+          totalSolvedCount: individualSolvedCount + teamSolvedCount,
+          totalAttemptedCount: individualAttemptedCount + teamAttemptedCount,
+          totalFailedAttemptsSum: individualFailedAttemptsSum + teamFailedAttemptsSum
+        }
+      };
+    });
+
+    // Compile user-level details
+    const userStats = individualSessions.map(session => {
+      const user = session.userId || {};
+      const questionsDetail = (challenge.questions || []).map(q => {
+        const qIdStr = q._id.toString();
+        const solvedObj = (session.solvedQuestions || []).find(sq => sq.questionId.toString() === qIdStr);
+        const attemptObj = (session.questionAttempts || []).find(qa => qa.questionId.toString() === qIdStr);
+        
+        return {
+          questionId: q._id,
+          questionTitle: q.title,
+          solved: !!solvedObj,
+          solvedAt: solvedObj ? solvedObj.solvedAt : null,
+          failedAttempts: attemptObj ? attemptObj.failedAttempts : 0,
+        };
+      });
+
+      return {
+        sessionId: session._id,
+        userId: user._id,
+        username: user.username || 'Unknown',
+        fullName: `${user.name || ''} ${user.surname || ''}`.trim() || 'Unknown',
+        email: user.email || '',
+        openedAt: session.openedAt,
+        finishedAt: session.finishedAt,
+        status: session.status,
+        failedAttempts: session.failedAttempts || 0,
+        questionsDetail
+      };
+    });
+
+    // Compile team-level details
+    const teamStats = teamSessions.map(session => {
+      const team = session.teamId || {};
+      const questionsDetail = (challenge.questions || []).map(q => {
+        const qIdStr = q._id.toString();
+        const solvedObj = (session.solvedQuestions || []).find(sq => sq.questionId.toString() === qIdStr);
+        const attemptObj = (session.questionAttempts || []).find(qa => qa.questionId.toString() === qIdStr);
+
+        return {
+          questionId: q._id,
+          questionTitle: q.title,
+          solved: !!solvedObj,
+          solvedAt: solvedObj ? solvedObj.solvedAt : null,
+          failedAttempts: attemptObj ? attemptObj.failedAttempts : 0,
+        };
+      });
+
+      return {
+        sessionId: session._id,
+        teamId: team._id,
+        teamName: team.name || 'Unknown',
+        openedAt: session.openedAt,
+        finishedAt: session.finishedAt,
+        status: session.status,
+        failedAttempts: session.failedAttempts || 0,
+        questionsDetail
+      };
+    });
+
+    res.status(200).json({
+      success: true,
+      data: {
+        challenge: {
+          _id: challenge._id,
+          title: challenge.title,
+          difficulty: challenge.difficulty,
+          stars: challenge.stars,
+          category: challenge.category
+        },
+        questions,
+        userStats,
+        teamStats
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+
